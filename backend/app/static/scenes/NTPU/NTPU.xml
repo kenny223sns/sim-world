@@ -1,0 +1,190 @@
+<scene version="2.1.0">
+
+<!-- Defaults, these can be set via the command line: -Darg=value -->
+
+
+<!-- Camera and Rendering Parameters -->
+
+	<integrator type="path" id="elm__0" name="elm__0">
+		<integer name="max_depth" value="12"/>
+	</integrator>
+
+<!-- Materials -->
+
+	<bsdf type="diffuse" id="mat-wall" name="mat-wall">
+		<rgb value="1.000000 0.500000 0.200000" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-roof" name="mat-roof">
+		<rgb value="0.290000 0.250000 0.210000" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-b20025" name="mat-b20025">
+		<rgb value="0.698039 0.000000 0.145098" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-areas_pedestrian" name="mat-areas_pedestrian">
+		<rgb value="0.086500 0.090842 0.088656" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-areas_footway" name="mat-areas_footway">
+		<rgb value="0.086500 0.090842 0.088656" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-roads_secondary" name="mat-roads_secondary">
+		<rgb value="0.086500 0.090842 0.088656" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-roads_residential" name="mat-roads_residential">
+		<rgb value="0.086500 0.090842 0.088656" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-roads_unclassified" name="mat-roads_unclassified">
+		<rgb value="0.086500 0.090842 0.088656" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-roads_pedestrian" name="mat-roads_pedestrian">
+		<rgb value="0.086500 0.090842 0.088656" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-roads_other" name="mat-roads_other">
+		<rgb value="0.086500 0.090842 0.088656" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-paths_steps" name="mat-paths_steps">
+		<rgb value="0.086500 0.090842 0.088656" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-roads_track" name="mat-roads_track">
+		<rgb value="0.564712 0.332452 0.066626" name="reflectance"/>
+	</bsdf>
+	<bsdf type="twosided" id="mat-rastMat" name="mat-rastMat">
+		<bsdf type="principled" name="bsdf">
+			<texture type="bitmap" name="base_color">
+				<string name="filename" value="textures/EXPORT_GOOGLE_SAT_WM.png"/>
+			</texture>
+			<rgb value="1.000000 1.000000 1.000000" name="spec_tint"/>
+			<float name="spec_trans" value="0.000000"/>
+			<float name="metallic" value="0.000000"/>
+			<float name="anisotropic" value="0.000000"/>
+			<float name="roughness" value="0.250000"/>
+			<float name="sheen" value="0.000000"/>
+			<rgb value="1.000000 1.000000 1.000000" name="sheen_tint"/>
+			<float name="clearcoat" value="0.000000"/>
+			<float name="clearcoat_gloss" value="0.000900"/>
+			<float name="specular" value="0.500000"/>
+		</bsdf>
+	</bsdf>
+
+<!-- Emitters -->
+
+
+<!-- Shapes -->
+
+	<shape type="ply" id="elm__4" name="elm__4">
+		<string name="filename" value="meshes/map_osm_buildings-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__5" name="elm__5">
+		<string name="filename" value="meshes/map_osm_buildings-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__6" name="elm__6">
+		<string name="filename" value="meshes/map_osm_buildings-b20025.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-b20025" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__8" name="elm__8">
+		<string name="filename" value="meshes/map_osm_areas_pedestrian.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-areas_pedestrian" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__10" name="elm__10">
+		<string name="filename" value="meshes/map_osm_areas_footway.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-areas_footway" name="bsdf"/>
+	</shape>
+	<shape type="shapegroup" id="mesh-map_osm_roads_secondary" name="mesh-map_osm_roads_secondary">
+		<shape type="ply" name="map_osm_roads_secondary">
+			<string name="filename" value="meshes/map_osm_roads_secondary.ply"/>
+			<ref id="mat-roads_secondary" name="bsdf"/>
+		</shape>
+	</shape>
+	<shape type="instance" id="elm__13" name="elm__13">
+		<ref id="mesh-map_osm_roads_secondary" name="shape"/>
+		<transform name="to_world">
+			<matrix value="1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.300000 0.000000 -1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000"/>
+		</transform>
+	</shape>
+	<shape type="shapegroup" id="mesh-map_osm_roads_residential" name="mesh-map_osm_roads_residential">
+		<shape type="ply" name="map_osm_roads_residential">
+			<string name="filename" value="meshes/map_osm_roads_residential.ply"/>
+			<ref id="mat-roads_residential" name="bsdf"/>
+		</shape>
+	</shape>
+	<shape type="instance" id="elm__16" name="elm__16">
+		<ref id="mesh-map_osm_roads_residential" name="shape"/>
+		<transform name="to_world">
+			<matrix value="1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.300000 0.000000 -1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000"/>
+		</transform>
+	</shape>
+	<shape type="shapegroup" id="mesh-map_osm_roads_unclassified" name="mesh-map_osm_roads_unclassified">
+		<shape type="ply" name="map_osm_roads_unclassified">
+			<string name="filename" value="meshes/map_osm_roads_unclassified.ply"/>
+			<ref id="mat-roads_unclassified" name="bsdf"/>
+		</shape>
+	</shape>
+	<shape type="instance" id="elm__19" name="elm__19">
+		<ref id="mesh-map_osm_roads_unclassified" name="shape"/>
+		<transform name="to_world">
+			<matrix value="1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.300000 0.000000 -1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000"/>
+		</transform>
+	</shape>
+	<shape type="shapegroup" id="mesh-map_osm_roads_pedestrian" name="mesh-map_osm_roads_pedestrian">
+		<shape type="ply" name="map_osm_roads_pedestrian">
+			<string name="filename" value="meshes/map_osm_roads_pedestrian.ply"/>
+			<ref id="mat-roads_pedestrian" name="bsdf"/>
+		</shape>
+	</shape>
+	<shape type="instance" id="elm__22" name="elm__22">
+		<ref id="mesh-map_osm_roads_pedestrian" name="shape"/>
+		<transform name="to_world">
+			<matrix value="1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.300000 0.000000 -1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000"/>
+		</transform>
+	</shape>
+	<shape type="shapegroup" id="mesh-map_osm_roads_other" name="mesh-map_osm_roads_other">
+		<shape type="ply" name="map_osm_roads_other">
+			<string name="filename" value="meshes/map_osm_roads_other.ply"/>
+			<ref id="mat-roads_other" name="bsdf"/>
+		</shape>
+	</shape>
+	<shape type="instance" id="elm__25" name="elm__25">
+		<ref id="mesh-map_osm_roads_other" name="shape"/>
+		<transform name="to_world">
+			<matrix value="1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.300000 0.000000 -1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000"/>
+		</transform>
+	</shape>
+	<shape type="shapegroup" id="mesh-map_osm_paths_steps" name="mesh-map_osm_paths_steps">
+		<shape type="ply" name="map_osm_paths_steps">
+			<string name="filename" value="meshes/map_osm_paths_steps.ply"/>
+			<ref id="mat-paths_steps" name="bsdf"/>
+		</shape>
+	</shape>
+	<shape type="instance" id="elm__28" name="elm__28">
+		<ref id="mesh-map_osm_paths_steps" name="shape"/>
+		<transform name="to_world">
+			<matrix value="1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.300000 0.000000 -1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000"/>
+		</transform>
+	</shape>
+	<shape type="shapegroup" id="mesh-map_osm_roads_track" name="mesh-map_osm_roads_track">
+		<shape type="ply" name="map_osm_roads_track">
+			<string name="filename" value="meshes/map_osm_roads_track.ply"/>
+			<ref id="mat-roads_track" name="bsdf"/>
+		</shape>
+	</shape>
+	<shape type="instance" id="elm__31" name="elm__31">
+		<ref id="mesh-map_osm_roads_track" name="shape"/>
+		<transform name="to_world">
+			<matrix value="1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000 0.300000 0.000000 -1.000000 0.000000 0.000000 0.000000 0.000000 0.000000 1.000000"/>
+		</transform>
+	</shape>
+	<shape type="ply" id="elm__33" name="elm__33">
+		<string name="filename" value="meshes/EXPORT_GOOGLE_SAT_WM.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-rastMat" name="bsdf"/>
+	</shape>
+
+<!-- Volumes -->
+
+</scene>

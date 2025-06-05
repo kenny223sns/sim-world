@@ -1,0 +1,159 @@
+<scene version="2.1.0">
+
+<!-- Defaults, these can be set via the command line: -Darg=value -->
+
+
+<!-- Camera and Rendering Parameters -->
+
+	<integrator type="path" id="elm__0" name="elm__0">
+		<integer name="max_depth" value="12"/>
+	</integrator>
+
+<!-- Materials -->
+
+	<bsdf type="diffuse" id="mat-wall" name="mat-wall">
+		<rgb value="1.000000 0.500000 0.200000" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-roof" name="mat-roof">
+		<rgb value="0.290000 0.250000 0.210000" name="reflectance"/>
+	</bsdf>
+	<bsdf type="diffuse" id="mat-water" name="mat-water">
+		<rgb value="0.009000 0.002000 0.800000" name="reflectance"/>
+	</bsdf>
+	<bsdf type="twosided" id="mat-rastMat" name="mat-rastMat">
+		<bsdf type="principled" name="bsdf">
+			<texture type="bitmap" name="base_color">
+				<string name="filename" value="textures/EXPORT_GOOGLE_SAT_WM.png"/>
+			</texture>
+			<rgb value="1.000000 1.000000 1.000000" name="spec_tint"/>
+			<float name="spec_trans" value="0.000000"/>
+			<float name="metallic" value="0.000000"/>
+			<float name="anisotropic" value="0.000000"/>
+			<float name="roughness" value="0.250000"/>
+			<float name="sheen" value="0.000000"/>
+			<rgb value="1.000000 1.000000 1.000000" name="sheen_tint"/>
+			<float name="clearcoat" value="0.000000"/>
+			<float name="clearcoat_gloss" value="0.000900"/>
+			<float name="specular" value="0.500000"/>
+		</bsdf>
+	</bsdf>
+
+<!-- Emitters -->
+
+
+<!-- Shapes -->
+
+	<shape type="ply" id="elm__3" name="elm__3">
+		<string name="filename" value="meshes/羽球館-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__4" name="elm__4">
+		<string name="filename" value="meshes/羽球館-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__5" name="elm__5">
+		<string name="filename" value="meshes/管理一館-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__6" name="elm__6">
+		<string name="filename" value="meshes/管理一館-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__7" name="elm__7">
+		<string name="filename" value="meshes/電子資訊大樓-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__8" name="elm__8">
+		<string name="filename" value="meshes/電子資訊大樓-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__9" name="elm__9">
+		<string name="filename" value="meshes/人社二舘-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__10" name="elm__10">
+		<string name="filename" value="meshes/人社二舘-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__11" name="elm__11">
+		<string name="filename" value="meshes/固態電子系統大樓-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__12" name="elm__12">
+		<string name="filename" value="meshes/固態電子系統大樓-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__13" name="elm__13">
+		<string name="filename" value="meshes/光環科技-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__14" name="elm__14">
+		<string name="filename" value="meshes/光環科技-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__15" name="elm__15">
+		<string name="filename" value="meshes/台灣光罩-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__16" name="elm__16">
+		<string name="filename" value="meshes/台灣光罩-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__17" name="elm__17">
+		<string name="filename" value="meshes/人社三館-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__18" name="elm__18">
+		<string name="filename" value="meshes/人社三館-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__19" name="elm__19">
+		<string name="filename" value="meshes/element-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__20" name="elm__20">
+		<string name="filename" value="meshes/element-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__21" name="elm__21">
+		<string name="filename" value="meshes/學生活動中心-wall.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-wall" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__22" name="elm__22">
+		<string name="filename" value="meshes/學生活動中心-roof.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-roof" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__24" name="elm__24">
+		<string name="filename" value="meshes/荷花池.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-water" name="bsdf"/>
+	</shape>
+	<shape type="ply" id="elm__26" name="elm__26">
+		<string name="filename" value="meshes/EXPORT_GOOGLE_SAT_WM.ply"/>
+		<boolean name="face_normals" value="true"/>
+		<ref id="mat-rastMat" name="bsdf"/>
+	</shape>
+
+<!-- Volumes -->
+
+</scene>
