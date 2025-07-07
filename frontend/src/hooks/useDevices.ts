@@ -286,15 +286,16 @@ export const useDevices = () => {
             );
 
             if (deviceIndex !== -1) {
-                const newX = parseFloat(pos[0].toFixed(2));
-                const newY = parseFloat(pos[2].toFixed(2)); // 注意 App.tsx 中 y 和 z 的對應關係
-                const newZ = parseFloat(pos[1].toFixed(2)); // 注意 App.tsx 中 y 和 z 的對應關係
+                const newX = parseFloat(pos[0].toFixed(3));
+                const newY = parseFloat(pos[2].toFixed(3)); // 注意 App.tsx 中 y 和 z 的對應關係
+                const newZ = parseFloat(pos[1].toFixed(3)); // 注意 App.tsx 中 y 和 z 的對應關係
 
-                // 檢查位置是否有實際變化
+                // 檢查位置是否有實際變化（使用較寬鬆的閾值）
+                const threshold = 0.01; // 1cm threshold
                 if (
-                    updatedDevices[deviceIndex].position_x !== newX ||
-                    updatedDevices[deviceIndex].position_y !== newY || // 通常後端是 y，但 App.tsx 用的是 pos[2] for y
-                    updatedDevices[deviceIndex].position_z !== newZ    // 通常後端是 z，但 App.tsx 用的是 pos[1] for z
+                    Math.abs(updatedDevices[deviceIndex].position_x - newX) > threshold ||
+                    Math.abs(updatedDevices[deviceIndex].position_y - newY) > threshold ||
+                    Math.abs(updatedDevices[deviceIndex].position_z - newZ) > threshold
                 ) {
                     updatedDevices[deviceIndex] = {
                         ...updatedDevices[deviceIndex],
@@ -302,6 +303,14 @@ export const useDevices = () => {
                         position_y: newY, // 假設後端是 y
                         position_z: newZ, // 假設後端是 z
                     };
+                    console.log(`Device ${deviceId} position updated:`, { 
+                        from: { 
+                            x: updatedDevices[deviceIndex].position_x, 
+                            y: updatedDevices[deviceIndex].position_y, 
+                            z: updatedDevices[deviceIndex].position_z 
+                        }, 
+                        to: { x: newX, y: newY, z: newZ } 
+                    });
                     // 使用 setTimeout 確保狀態更新在下一個事件循環中觸發，
                     // 這與 App.tsx 中的原始實現一致。
                     setTimeout(() => setHasTempDevices(true), 0);

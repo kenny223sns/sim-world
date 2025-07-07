@@ -46,6 +46,7 @@ export const ApiRoutes = {
     getDopplerMap: `${API_BASE_URL}/simulations/doppler-plots`,
     getChannelResponsePlots: `${API_BASE_URL}/simulations/channel-response`,
     getSceneImage: `${API_BASE_URL}/simulations/scene-image`,
+    getISSMap: `${API_BASE_URL}/simulations/iss-map`,
     getResults: (id: string) => `${API_BASE_URL}/simulations/${id}/results`,
     // 模型相關API路徑仍在sionna命名空間下
     getModel: (modelName: string) => `${API_BASE_URL}/sionna/models/${modelName}`,
@@ -64,6 +65,17 @@ export const ApiRoutes = {
   // 臨時的衛星可見性路由
   satelliteOps: {
     getVisibleSatellites: `${API_BASE_URL}/satellite-ops/visible_satellites`,
+  },
+  
+  // 無人機追蹤API
+  droneTracking: {
+    base: `${API_BASE_URL}/drone-tracking`,
+    recordPosition: `${API_BASE_URL}/drone-tracking/record-position`,
+    getMatrix: (sceneName: string) => `${API_BASE_URL}/drone-tracking/matrix/${sceneName}`,
+    clearMatrix: (sceneName: string) => `${API_BASE_URL}/drone-tracking/matrix/${sceneName}`,
+    exportData: (sceneName: string) => `${API_BASE_URL}/drone-tracking/export/${sceneName}`,
+    getStats: (sceneName: string) => `${API_BASE_URL}/drone-tracking/stats/${sceneName}`,
+    getScenes: `${API_BASE_URL}/drone-tracking/scenes`,
   },
   
   // 臨時的 sionna 命名空間相關路由 (已不存在於後端，前端保留向後兼容)

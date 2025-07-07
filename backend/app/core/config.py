@@ -84,6 +84,10 @@ DOPPLER_IMAGE_PATH = OUTPUT_DIR / "delay_doppler.png"  # 延遲多普勒圖路�
 CHANNEL_RESPONSE_IMAGE_PATH = OUTPUT_DIR / "channel_response_plots.png"
 logger.info(f"Time-Frequency Image Path (in container): {CHANNEL_RESPONSE_IMAGE_PATH}")
 
+# ISS 地圖路徑
+ISS_MAP_IMAGE_PATH = OUTPUT_DIR / "iss_map.png"  # ISS 地圖路徑
+logger.info(f"ISS Map Image Path (in container): {ISS_MAP_IMAGE_PATH}")
+
 # logger.info(f"Project Root (estimated): {PROJECT_ROOT}") # 不再需要
 logger.info(f"Static Directory (in container): {STATIC_DIR}")
 logger.info(f"Models Directory (in container): {MODELS_DIR}")

@@ -27,6 +27,14 @@ class SimulationParameters(BaseModel):
     bandwidth: Optional[float] = Field(None, description="頻寬 (Hz)")
     subcarriers: Optional[int] = Field(None, description="子載波數量")
 
+    # ISS Map 相關參數
+    scene_size: Optional[float] = Field(None, description="場景大小 (m)")
+    altitude: Optional[float] = Field(None, description="UAV 飛行高度 (m)")
+    resolution: Optional[float] = Field(None, description="解析度 (m)")
+    cfar_threshold_percentile: Optional[float] = Field(None, description="2D-CFAR 檢測門檻百分位數")
+    gaussian_sigma: Optional[float] = Field(None, description="高斯平滑化參數")
+    min_distance: Optional[int] = Field(None, description="峰值檢測最小距離")
+
     # 自定義參數
     custom_params: Optional[Dict[str, Any]] = Field(None, description="自定義參數")
 
@@ -55,7 +63,7 @@ class SimulationImageRequest(BaseModel):
 
     # 圖像類型
     image_type: str = Field(
-        ..., description="圖像類型，如'cfr', 'sinr_map', 'doppler', 'channel_response'"
+        ..., description="圖像類型，如'cfr', 'sinr_map', 'doppler', 'channel_response', 'iss_map'"
     )
 
     # 通用參數
@@ -68,3 +76,11 @@ class SimulationImageRequest(BaseModel):
     sinr_vmax: float = Field(0.0, description="SINR 最大值 (dB)")
     cell_size: float = Field(1.0, description="Radio map 網格大小 (m)")
     samples_per_tx: int = Field(10**7, description="每個發射器的採樣數量")
+
+    # ISS Map 相關參數
+    scene_size: float = Field(128.0, description="場景大小 (m)")
+    altitude: float = Field(30.0, description="UAV 飛行高度 (m)")
+    resolution: float = Field(4.0, description="解析度 (m)")
+    cfar_threshold_percentile: float = Field(99.5, description="2D-CFAR 檢測門檻百分位數")
+    gaussian_sigma: float = Field(1.0, description="高斯平滑化參數")
+    min_distance: int = Field(3, description="峰值檢測最小距離")

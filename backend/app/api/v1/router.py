@@ -21,6 +21,9 @@ from app.domains.wireless.api.wireless_api import router as wireless_router
 # Import interference domain API router
 from app.domains.interference.api.interference_api import router as interference_router
 
+# Import drone tracking domain API router
+from app.domains.drone_tracking.api.drone_tracking_api import router as drone_tracking_router
+
 # Import CQRS services
 from app.domains.satellite.services.cqrs_satellite_service import (
     CQRSSatelliteService,
@@ -89,6 +92,9 @@ api_router.include_router(wireless_router, prefix="/wireless", tags=["Wireless"]
 
 # Register interference domain API router
 api_router.include_router(interference_router, tags=["Interference"])
+
+# Register drone tracking domain API router
+api_router.include_router(drone_tracking_router, tags=["Drone Tracking"])
 
 
 # 添加模型資源路由

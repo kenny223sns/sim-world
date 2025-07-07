@@ -15,4 +15,5 @@ from app.domains.simulation.interfaces.simulation_service_interface import (
 from app.domains.simulation.services.sionna_service import (
     SionnaSimulationService,
     sionna_service,
+    generate_iss_map,
 )

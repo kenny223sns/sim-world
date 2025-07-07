@@ -25,6 +25,7 @@ from app.core.config import (
     DOPPLER_IMAGE_PATH,
     CHANNEL_RESPONSE_IMAGE_PATH,
     SINR_MAP_IMAGE_PATH,
+    ISS_MAP_IMAGE_PATH,
     get_scene_xml_path,
 )
 
@@ -47,10 +48,24 @@ from PIL import Image
 import io
 import tensorflow as tf
 
+# ISS Map 相關導入
+from scipy.ndimage import gaussian_filter, maximum_filter
+
 # 從 config 導入
 from app.core.config import NYCU_GLB_PATH, OUTPUT_DIR  # 確保導入 NYCU_GLB_PATH
 
 logger = logging.getLogger(__name__)
+
+# 嘗試導入 skimage，如果失敗則使用替代方案
+try:
+    from skimage.feature import peak_local_max
+except ImportError:
+    try:
+        from skimage.feature import peak_local_max as peak_local_maxima
+        peak_local_max = peak_local_maxima
+    except ImportError:
+        logger.warning("Warning: skimage not available, using custom implementation")
+        peak_local_max = None
 
 # --- 新增：場景背景顏色常數 ---
 SCENE_BACKGROUND_COLOR_RGB = [0.5, 0.5, 0.5]
@@ -1566,6 +1581,278 @@ async def generate_channel_response_plots(
         return False
 
 
+# 新增 ISS Map 生成函數
+async def generate_iss_map(
+    session: AsyncSession,
+    output_path: str = str(ISS_MAP_IMAGE_PATH),
+    scene_name: str = "nycu",
+    scene_size: float = 128.0,
+    altitude: float = 30.0,
+    resolution: float = 4.0,
+    cfar_threshold_percentile: float = 99.5,
+    gaussian_sigma: float = 1.0,
+    min_distance: int = 3,
+    cell_size: float = 1.0,
+    samples_per_tx: int = 10**7,
+) -> bool:
+    """
+    生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測
+    
+    從數據庫獲取發射器和干擾器設置，計算並生成 ISS 地圖
+    """
+    logger.info("開始生成 ISS 地圖...")
+
+    try:
+        # 準備輸出檔案
+        prepare_output_file(output_path, "ISS 地圖圖檔")
+
+        # GPU 設置
+        gpus = _setup_gpu()
+
+        # 創建設備服務和儲存庫
+        device_repository = SQLModelDeviceRepository(session)
+        device_service = DeviceService(device_repository)
+
+        # 從數據庫獲取活動的發射器 (desired)
+        logger.info("從數據庫獲取活動的發射器...")
+        active_desired = await device_service.get_devices(
+            skip=0, limit=100, role=DeviceRole.DESIRED.value, active_only=True
+        )
+
+        # 從數據庫獲取活動的干擾器 (jammer)
+        logger.info("從數據庫獲取活動的干擾器...")
+        active_jammers = await device_service.get_devices(
+            skip=0, limit=100, role=DeviceRole.JAMMER.value, active_only=True
+        )
+
+        # 從數據庫獲取活動的接收器
+        logger.info("從數據庫獲取活動的接收器...")
+        active_receivers = await device_service.get_devices(
+            skip=0, limit=100, role=DeviceRole.RECEIVER.value, active_only=True
+        )
+
+        # 檢查是否有足夠的設備
+        if not active_jammers:
+            logger.error("沒有活動的干擾器，無法生成 ISS 地圖")
+            return False
+
+        if not active_receivers:
+            logger.warning("沒有活動的接收器，將使用預設接收器位置")
+            rx_config = ("rx", [-30, 50, 20])
+        else:
+            # 使用第一個活動接收器
+            receiver = active_receivers[0]
+            rx_config = (
+                receiver.name,
+                [receiver.position_x, receiver.position_y, receiver.position_z],
+            )
+
+        # 構建 TX_LIST
+        tx_list = []
+
+        # 添加發射器
+        for tx in active_desired:
+            tx_name = tx.name
+            tx_position = [tx.position_x, tx.position_y, tx.position_z]
+            tx_orientation = [tx.orientation_x, tx.orientation_y, tx.orientation_z]
+            tx_power = tx.power_dbm
+
+            tx_list.append((tx_name, tx_position, tx_orientation, "desired", tx_power))
+            logger.info(
+                f"添加發射器: {tx_name}, 位置: {tx_position}, 方向: {tx_orientation}, 功率: {tx_power} dBm"
+            )
+
+        # 添加干擾器
+        for jammer in active_jammers:
+            jammer_name = jammer.name
+            jammer_position = [jammer.position_x, jammer.position_y, jammer.position_z]
+            jammer_orientation = [
+                jammer.orientation_x,
+                jammer.orientation_y,
+                jammer.orientation_z,
+            ]
+            jammer_power = jammer.power_dbm
+
+            tx_list.append(
+                (
+                    jammer_name,
+                    jammer_position,
+                    jammer_orientation,
+                    "jammer",
+                    jammer_power,
+                )
+            )
+            logger.info(
+                f"添加干擾器: {jammer_name}, 位置: {jammer_position}, 方向: {jammer_orientation}, 功率: {jammer_power} dBm"
+            )
+
+        # 參數設置
+        scene_xml_path = get_scene_xml_file_path(scene_name)
+        logger.info(f"從 {scene_xml_path} 加載場景")
+
+        tx_array_config = {
+            "num_rows": 1,
+            "num_cols": 1,
+            "vertical_spacing": 0.5,
+            "horizontal_spacing": 0.5,
+            "pattern": "iso",
+            "polarization": "V",
+        }
+        rx_array_config = tx_array_config
+
+        rmsolver_args = {
+            "max_depth": 10,
+            "cell_size": (cell_size, cell_size),
+            "samples_per_tx": samples_per_tx,
+            "refraction": False,
+            "los": True,
+            "specular_reflection": True,
+        }
+
+        # 場景設置
+        logger.info("設置場景")
+        scene = load_scene(scene_xml_path)
+        scene.tx_array = PlanarArray(**tx_array_config)
+        scene.rx_array = PlanarArray(**rx_array_config)
+
+        # 清除現有的發射器和接收器
+        for name in list(scene.transmitters.keys()) + list(scene.receivers.keys()):
+            scene.remove(name)
+
+        # 添加發射器
+        logger.info("添加發射器")
+
+        def add_tx(scene, name, pos, ori, role, power_dbm):
+            tx = SionnaTransmitter(
+                name=name, position=pos, orientation=ori, power_dbm=power_dbm
+            )
+            tx.role = role
+            scene.add(tx)
+            return tx
+
+        for name, pos, ori, role, p_dbm in tx_list:
+            add_tx(scene, name, pos, ori, role, p_dbm)
+
+        # 添加接收器
+        rx_name, rx_pos = rx_config
+        logger.info(f"添加接收器 '{rx_name}' 在位置 {rx_pos}")
+        scene.add(SionnaReceiver(name=rx_name, position=rx_pos))
+
+        # 按角色分組發射器
+        all_txs = [scene.get(n) for n in scene.transmitters]
+        idx_des = [
+            i for i, tx in enumerate(all_txs) if getattr(tx, "role", None) == "desired"
+        ]
+        idx_jam = [
+            i for i, tx in enumerate(all_txs) if getattr(tx, "role", None) == "jammer"
+        ]
+
+        if not idx_jam:
+            logger.error("場景中沒有有效的干擾器")
+            return False
+
+        # 計算無線電地圖
+        logger.info("計算無線電地圖")
+        rm_solver = RadioMapSolver()
+        rm = rm_solver(scene, **rmsolver_args)
+
+        # 計算 ISS (Interference Signal Strength)
+        logger.info("計算 ISS")
+        cc = rm.cell_centers.numpy()
+        x_unique = cc[0, :, 0]
+        y_unique = cc[:, 0, 1]
+        
+        # 獲取所有發射器的RSS
+        WSS = rm.rss[:].numpy()
+        
+        # 計算干擾信號總功率 (僅干擾器)
+        ISS = np.sum(WSS[idx_jam, :, :], axis=0)
+        
+        # 平滑化處理
+        logger.info("進行高斯平滑化處理")
+        ISS_smooth = gaussian_filter(ISS, sigma=gaussian_sigma)
+
+        # 2D-CFAR 檢測
+        logger.info("進行 2D-CFAR 檢測")
+        
+        # 局部最大值過濾
+        local_max = maximum_filter(ISS_smooth, size=5)
+        peaks = (ISS_smooth == local_max)
+
+        # 設定強度門檻（百分位數）
+        threshold = np.percentile(ISS_smooth, cfar_threshold_percentile)
+
+        # 使用 peak_local_max 找出高於門檻的最大值座標
+        if peak_local_max is not None:
+            peak_coords = peak_local_max(
+                ISS_smooth,
+                min_distance=min_distance,
+                threshold_abs=threshold
+            )
+        else:
+            # 簡化版本的峰值檢測
+            peak_coords = np.column_stack(np.where((peaks) & (ISS_smooth > threshold)))
+
+        # 可視化
+        logger.info("生成 ISS 地圖可視化")
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        # 繪製 ISS 地圖
+        pcm = ax.pcolormesh(x_unique, y_unique, ISS_smooth, shading='nearest', cmap='viridis')
+        fig.colorbar(pcm, ax=ax, label="Interference Signal Strength")
+        ax.set_title("ISS Map with 2D-CFAR Peak Detection")
+        
+        # 標記檢測到的峰值
+        if len(peak_coords) > 0:
+            peak_x = x_unique[peak_coords[:, 1]]
+            peak_y = y_unique[peak_coords[:, 0]]
+            ax.scatter(peak_x, peak_y, color='red', marker='x', s=100, label='Detected Peaks')
+
+        # 標記發射器
+        for tx in all_txs:
+            if getattr(tx, 'role', None) == 'desired':
+                ax.scatter(tx.position[0], tx.position[1], c='blue', marker='o', s=100, label='Desired Tx')
+            elif getattr(tx, 'role', None) == 'jammer':
+                ax.scatter(tx.position[0], tx.position[1], c='green', marker='o', s=100, label='Jammer')
+
+        # 標記接收器
+        rx_object = scene.get(rx_name)
+        if rx_object:
+            ax.scatter(
+                rx_object.position[0],
+                rx_object.position[1],
+                c='blue',
+                marker='^',
+                s=50,
+                label='Rx',
+            )
+
+        ax.legend()
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
+        ax.invert_yaxis()
+        plt.tight_layout()
+
+        # 保存圖片
+        logger.info(f"保存 ISS 地圖到 {output_path}")
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+        # 記錄檢測結果
+        logger.info(f"檢測到 {len(peak_coords)} 個干擾源峰值")
+        for i, coord in enumerate(peak_coords):
+            logger.info(f"峰值 {i+1}: 行={coord[0]}, 列={coord[1]}")
+
+        # 檢查文件是否生成成功
+        return verify_output_file(output_path)
+
+    except Exception as e:
+        logger.exception(f"生成 ISS 地圖時發生錯誤: {e}")
+        # 確保關閉所有打開的圖表
+        plt.close("all")
+        return False
+
+
 # --- 主服務類 ---
 class SionnaSimulationService(SimulationServiceInterface):
     """Sionna模擬服務實現"""
@@ -1667,6 +1954,38 @@ class SionnaSimulationService(SimulationServiceInterface):
             session=session, output_path=output_path, scene_name=scene_name
         )
 
+    async def generate_iss_map(
+        self,
+        session: AsyncSession,
+        output_path: str,
+        scene_name: str = "nycu",
+        scene_size: float = 128.0,
+        altitude: float = 30.0,
+        resolution: float = 4.0,
+        cfar_threshold_percentile: float = 99.5,
+        gaussian_sigma: float = 1.0,
+        min_distance: int = 3,
+        cell_size: float = 1.0,
+        samples_per_tx: int = 10**7,
+    ) -> bool:
+        """生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測"""
+        logger.info(
+            f"SionnaSimulationService: Calling global generate_iss_map, output_path: {output_path}, scene: {scene_name}"
+        )
+        return await generate_iss_map(
+            session=session,
+            output_path=output_path,
+            scene_name=scene_name,
+            scene_size=scene_size,
+            altitude=altitude,
+            resolution=resolution,
+            cfar_threshold_percentile=cfar_threshold_percentile,
+            gaussian_sigma=gaussian_sigma,
+            min_distance=min_distance,
+            cell_size=cell_size,
+            samples_per_tx=samples_per_tx,
+        )
+
     async def run_simulation(
         self, session: AsyncSession, params: SimulationParameters
     ) -> Dict[str, Any]:
@@ -1706,6 +2025,24 @@ class SionnaSimulationService(SimulationServiceInterface):
                 output_path = str(CHANNEL_RESPONSE_IMAGE_PATH)
                 success = await self.generate_channel_response_plots(
                     session, output_path
+                )
+                result["result_path"] = output_path
+                result["success"] = success
+
+            elif params.simulation_type == "iss_map":
+                output_path = str(ISS_MAP_IMAGE_PATH)
+                success = await self.generate_iss_map(
+                    session,
+                    output_path,
+                    scene_name="nycu",
+                    scene_size=params.scene_size or 128.0,
+                    altitude=params.altitude or 30.0,
+                    resolution=params.resolution or 4.0,
+                    cfar_threshold_percentile=params.cfar_threshold_percentile or 99.5,
+                    gaussian_sigma=params.gaussian_sigma or 1.0,
+                    min_distance=params.min_distance or 3,
+                    cell_size=params.cell_size or 1.0,
+                    samples_per_tx=params.samples_per_tx or 10**7,
                 )
                 result["result_path"] = output_path
                 result["success"] = success

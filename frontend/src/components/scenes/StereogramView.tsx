@@ -6,6 +6,7 @@ import Starfield from '../ui/Starfield'
 import MainScene from './MainScene'
 import { Device } from '../../types/device'
 import { VisibleSatelliteInfo } from '../../types/satellite'
+import { UseDroneTrackingReturn } from '../../hooks/useDroneTracking'
 
 // 添加圖例组件
 const SatelliteLegend = () => {
@@ -43,6 +44,7 @@ interface SceneViewProps {
     selectedReceiverIds?: number[]
     satellites?: VisibleSatelliteInfo[]
     sceneName: string // 新增場景名稱參數
+    droneTracking?: UseDroneTrackingReturn // Drone tracking state and actions
 }
 
 export default function SceneView({
@@ -55,8 +57,112 @@ export default function SceneView({
     selectedReceiverIds = [],
     satellites = [],
     sceneName,
+    droneTracking,
 }: SceneViewProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
+    
+    // Use passed droneTracking or create fallback
+    const { isTracking, recordPosition } = droneTracking || { isTracking: false, recordPosition: async () => false }
+    const lastRecordedDevicePositions = useRef<Map<number, { x: number; y: number; time: number }>>(new Map())
+
+    // Enhanced position update handler that includes drone tracking
+    const handleUAVPositionUpdate = useCallback(async (
+        position: [number, number, number],
+        deviceId?: number
+    ) => {
+        // Call the original position update handler if provided
+        if (onUAVPositionUpdate) {
+            onUAVPositionUpdate(position, deviceId)
+        }
+    }, [onUAVPositionUpdate])
+
+    // Monitor RX device position changes for tracking with polling
+    useEffect(() => {
+        console.log('Position tracking useEffect triggered:', { isTracking, sceneName, devicesCount: devices.length })
+        
+        if (!isTracking || !sceneName) {
+            console.log('Tracking not active:', { isTracking, sceneName })
+            return
+        }
+
+        const checkPositions = async () => {
+            const receiverDevices = devices.filter(device => 
+                device.role === 'receiver' && device.id !== null && device.id >= 0
+            )
+
+            console.log('Checking positions for receiver devices:', receiverDevices.map(d => ({ 
+                id: d.id, 
+                name: d.name, 
+                position: { x: d.position_x, y: d.position_y, z: d.position_z },
+                role: d.role 
+            })))
+
+            // Process each receiver device
+            for (const device of receiverDevices) {
+                const deviceId = device.id as number
+                const currentPos = { x: device.position_x, y: device.position_y }
+                const lastPos = lastRecordedDevicePositions.current.get(deviceId)
+                const now = Date.now()
+
+                // Check if position changed significantly or enough time has passed
+                const shouldRecord = !lastPos || 
+                    Math.abs(currentPos.x - lastPos.x) >= 0.1 || // 0.1 meter threshold (reduced)
+                    Math.abs(currentPos.y - lastPos.y) >= 0.1 ||
+                    (now - lastPos.time) >= 500 // 500ms minimum interval (reduced)
+
+                console.log(`Device ${device.name}:`, {
+                    currentPos,
+                    lastPos,
+                    shouldRecord,
+                    positionDiff: lastPos ? {
+                        dx: Math.abs(currentPos.x - lastPos.x),
+                        dy: Math.abs(currentPos.y - lastPos.y)
+                    } : 'no last pos',
+                    timeDiff: lastPos ? (now - lastPos.time) : 'no last time'
+                })
+
+                if (shouldRecord) {
+                    console.log(`Recording position for ${device.name}:`, currentPos)
+                    
+                    try {
+                        const success = await recordPosition({
+                            scene_x: device.position_x,
+                            scene_y: device.position_y, 
+                            scene_z: device.position_z,
+                            scene_name: sceneName
+                        })
+
+                        console.log(`Recording result for ${device.name}:`, success)
+
+                        if (success) {
+                            lastRecordedDevicePositions.current.set(deviceId, {
+                                x: currentPos.x,
+                                y: currentPos.y,
+                                time: now
+                            })
+                            console.log(`Updated last recorded position for ${device.name}:`, {
+                                x: currentPos.x,
+                                y: currentPos.y,
+                                time: now
+                            })
+                        }
+                    } catch (error) {
+                        console.error(`Error recording position for ${device.name}:`, error)
+                    }
+                }
+            }
+        }
+
+        // Initial check
+        checkPositions()
+
+        // Set up polling interval to check positions every 250ms for more responsive tracking
+        const interval = setInterval(checkPositions, 250)
+
+        return () => {
+            clearInterval(interval)
+        }
+    }, [devices, isTracking, sceneName, recordPosition])
 
     // WebGL 上下文恢復處理
     const handleWebGLContextLost = useCallback((event: Event) => {
@@ -152,7 +258,7 @@ export default function SceneView({
                         auto={auto}
                         manualDirection={manualDirection}
                         manualControl={onManualControl}
-                        onUAVPositionUpdate={onUAVPositionUpdate}
+                        onUAVPositionUpdate={handleUAVPositionUpdate}
                         uavAnimation={uavAnimation}
                         selectedReceiverIds={selectedReceiverIds}
                         satellites={satellites}

@@ -61,7 +61,7 @@ export default function UAVFlight({
     }>({})
 
     const lastUpdateTimeRef = useRef<number>(0)
-    const throttleInterval = 100
+    const throttleInterval = 50
 
     const [currentPosition, setCurrentPosition] = useState<THREE.Vector3>(
         new THREE.Vector3(...position)

@@ -11,6 +11,7 @@ import './styles/App.scss'
 import { Device } from './types/device'
 import { countActiveDevices } from './utils/deviceUtils'
 import { useDevices } from './hooks/useDevices'
+import { useDroneTracking } from './hooks/useDroneTracking'
 import { VisibleSatelliteInfo } from './types/satellite'
 import './styles/Dashboard.scss'
 
@@ -70,6 +71,9 @@ function App({ activeView }: AppProps) {
     >(null)
     const [uavAnimation, setUavAnimation] = useState(false)
     const [selectedReceiverIds, setSelectedReceiverIds] = useState<number[]>([])
+
+    // Drone tracking state - centralized here to share between components
+    const droneTracking = useDroneTracking()
 
     const sortedDevicesForSidebar = useMemo(() => {
         return [...tempDevices].sort((a, b) => {
@@ -229,6 +233,7 @@ function App({ activeView }: AppProps) {
                         selectedReceiverIds={selectedReceiverIds}
                         satellites={satelliteEnabled ? skyfieldSatellites : []}
                         sceneName={currentScene}
+                        droneTracking={droneTracking}
                     />
                 )
             default:
@@ -285,6 +290,7 @@ function App({ activeView }: AppProps) {
                                     onAutoChange={setAuto}
                                     onManualControl={handleManualControl}
                                     activeComponent={activeComponent}
+                                    currentScene={currentScene}
                                     uavAnimation={uavAnimation}
                                     onUavAnimationChange={setUavAnimation}
                                     onSelectedReceiversChange={
@@ -303,6 +309,7 @@ function App({ activeView }: AppProps) {
                                     onSatelliteEnabledChange={
                                         setSatelliteEnabled
                                     }
+                                    droneTracking={droneTracking}
                                 />
                             </ErrorBoundary>
                         }

@@ -6,6 +6,7 @@ import SINRViewer from '../viewers/SINRViewer'
 import CFRViewer from '../viewers/CFRViewer'
 import DelayDopplerViewer from '../viewers/DelayDopplerViewer'
 import TimeFrequencyViewer from '../viewers/TimeFrequencyViewer'
+import ISSViewer from '../viewers/ISSViewer'
 import ViewerModal from '../ui/ViewerModal'
 import { ViewerProps } from '../../types/viewer'
 import {
@@ -55,6 +56,7 @@ const Navbar: FC<NavbarProps> = ({
     const [showCFRModal, setShowCFRModal] = useState(false)
     const [showDelayDopplerModal, setShowDelayDopplerModal] = useState(false)
     const [showTimeFrequencyModal, setShowTimeFrequencyModal] = useState(false)
+    const [showISSModal, setShowISSModal] = useState(false)
 
     // States for last update times
     const [sinrModalLastUpdate, setSinrModalLastUpdate] = useState<string>('')
@@ -63,12 +65,14 @@ const Navbar: FC<NavbarProps> = ({
         useState<string>('')
     const [timeFrequencyModalLastUpdate, setTimeFrequencyModalLastUpdate] =
         useState<string>('')
+    const [issModalLastUpdate, setISSModalLastUpdate] = useState<string>('')
 
     // Refs for refresh handlers
     const sinrRefreshHandlerRef = useRef<(() => void) | null>(null)
     const cfrRefreshHandlerRef = useRef<(() => void) | null>(null)
     const delayDopplerRefreshHandlerRef = useRef<(() => void) | null>(null)
     const timeFrequencyRefreshHandlerRef = useRef<(() => void) | null>(null)
+    const issRefreshHandlerRef = useRef<(() => void) | null>(null)
 
     // States for loading status for header titles
     const [sinrIsLoadingForHeader, setSinrIsLoadingForHeader] =
@@ -81,6 +85,8 @@ const Navbar: FC<NavbarProps> = ({
         timeFrequencyIsLoadingForHeader,
         setTimeFrequencyIsLoadingForHeader,
     ] = useState<boolean>(true)
+    const [issIsLoadingForHeader, setISSIsLoadingForHeader] =
+        useState<boolean>(true)
 
     const toggleMenu = () => {
         setIsMenuOpen(!isMenuOpen)
@@ -182,6 +188,24 @@ const Navbar: FC<NavbarProps> = ({
             setIsLoading: setTimeFrequencyIsLoadingForHeader,
             refreshHandlerRef: timeFrequencyRefreshHandlerRef,
             ViewerComponent: TimeFrequencyViewer,
+        },
+        {
+            id: 'iss',
+            menuText: '干擾檢測地圖',
+            titleConfig: {
+                base: '干擾信號檢測地圖 (2D-CFAR)',
+                loading: '正在計算干擾信號檢測地圖並執行 2D-CFAR 檢測...',
+                hoverRefresh: '重新生成干擾檢測地圖',
+            },
+            isOpen: showISSModal,
+            openModal: () => setShowISSModal(true),
+            closeModal: () => setShowISSModal(false),
+            lastUpdate: issModalLastUpdate,
+            setLastUpdate: setISSModalLastUpdate,
+            isLoading: issIsLoadingForHeader,
+            setIsLoading: setISSIsLoadingForHeader,
+            refreshHandlerRef: issRefreshHandlerRef,
+            ViewerComponent: ISSViewer,
         },
     ]
 

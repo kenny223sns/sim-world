@@ -10,6 +10,7 @@ from app.core.config import (
     SINR_MAP_IMAGE_PATH,
     DOPPLER_IMAGE_PATH,
     CHANNEL_RESPONSE_IMAGE_PATH,
+    ISS_MAP_IMAGE_PATH,
     get_scene_xml_path,
 )
 from app.domains.simulation.models.simulation_model import (
@@ -161,6 +162,30 @@ async def get_channel_response(
     except Exception as e:
         logger.error(f"生成通道響應圖時出錯: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"生成通道響應圖時出錯: {str(e)}")
+
+
+@router.get("/iss-map", response_description="干擾信號檢測地圖")
+async def get_iss_map(
+    session: AsyncSession = Depends(get_session),
+    scene: str = Query("nycu", description="場景名稱 (nycu, lotus)"),
+):
+    """產生並回傳干擾信號檢測地圖 (使用 2D-CFAR 技術)"""
+    logger.info(f"--- API Request: /iss-map?scene={scene} ---")
+
+    try:
+        success = await sionna_service.generate_iss_map(
+            session=session, 
+            output_path=str(ISS_MAP_IMAGE_PATH),
+            scene_name=scene
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="產生干擾信號檢測地圖失敗")
+
+        return create_image_response(str(ISS_MAP_IMAGE_PATH), "iss_map.png")
+    except Exception as e:
+        logger.error(f"生成干擾信號檢測地圖時出錯: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成干擾信號檢測地圖時出錯: {str(e)}")
 
 
 @router.post("/run", response_model=Dict[str, Any])

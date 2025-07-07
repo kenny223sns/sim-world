@@ -49,6 +49,24 @@ class SimulationServiceInterface(ABC):
         pass
 
     @abstractmethod
+    async def generate_iss_map(
+        self,
+        session: AsyncSession,
+        output_path: str,
+        scene_name: str = "nycu",
+        scene_size: float = 128.0,
+        altitude: float = 30.0,
+        resolution: float = 4.0,
+        cfar_threshold_percentile: float = 99.5,
+        gaussian_sigma: float = 1.0,
+        min_distance: int = 3,
+        cell_size: float = 1.0,
+        samples_per_tx: int = 10**7,
+    ) -> bool:
+        """生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測"""
+        pass
+
+    @abstractmethod
     async def run_simulation(
         self, session: AsyncSession, params: SimulationParameters
     ) -> Dict[str, Any]:

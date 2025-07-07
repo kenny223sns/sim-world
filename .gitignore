@@ -1,4 +1,23 @@
-.env
-__pycache__
-node_modules
-.vscode
+# Python cache and virtual env
+__pycache__/
+*.pyc
+venv/
+*.egg-info/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VSCode settings
+.vscode/
+
+# Numpy or Tensorflow generated data
+*.npy
+*.npz
+
+# Logs and temp files
+*.log
+*.tmp
+
+# System files
+.DS_Store
+Thumbs.db

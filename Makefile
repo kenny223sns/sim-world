@@ -1,11 +1,11 @@
 .PHONY: up down down-v clean build
 
-up: build
+up: 
 	docker compose up -d
 
 down:
 	docker compose down
-	docker network prune -f
+	
 
 down-v:
 	docker compose down -v
@@ -22,6 +22,12 @@ build:
 
 no-cache:
 	docker compose build --no-cache
+
+log-b:
+	docker compose logs backend
+
+log-f:
+	docker compose logs frontend
 
 re-b:
 	docker compose restart backend

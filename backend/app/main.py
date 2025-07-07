@@ -9,11 +9,6 @@ from contextlib import asynccontextmanager
 from app.db.lifespan import lifespan
 from app.api.v1.router import api_router
 from app.core.config import OUTPUT_DIR  # 導入設定的圖片目錄路徑
-from app.domains.satellite.services.cqrs_satellite_service import CQRSSatelliteService
-
-# 添加缺失的導入
-from app.db.database import database
-from app.domains.satellite.services.orbit_service import OrbitService
 
 logger = logging.getLogger(__name__)
 
@@ -96,43 +91,3 @@ if __name__ == "__main__":
 logger.info(
     "FastAPI application setup complete. Ready for Uvicorn via external command."
 )
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """應用生命週期管理 - CQRS 版本"""
-
-    # 啟動應用
-    logger.info("🚀 SimWorld Backend 啟動中...")
-
-    # 初始化資料庫
-    await database.connect()
-    logger.info("✅ 資料庫連線建立")
-
-    # 初始化現有服務
-    orbit_service = OrbitService()
-
-    # 初始化新的 CQRS 衛星服務
-    cqrs_satellite_service = CQRSSatelliteService(orbit_service)
-    await cqrs_satellite_service.start()
-    logger.info("✅ CQRS 衛星服務已啟動")
-
-    # 將服務存儲到 app state
-    app.state.orbit_service = orbit_service
-    app.state.cqrs_satellite_service = cqrs_satellite_service
-
-    logger.info("✅ SimWorld Backend 啟動完成")
-
-    yield
-
-    # 應用關閉
-    logger.info("🛑 SimWorld Backend 關閉中...")
-
-    # 停止 CQRS 衛星服務
-    if hasattr(app.state, "cqrs_satellite_service"):
-        await app.state.cqrs_satellite_service.stop()
-        logger.info("✅ CQRS 衛星服務已停止")
-
-    # 關閉資料庫連線
-    await database.disconnect()
-    logger.info("✅ 資料庫連線已關閉")

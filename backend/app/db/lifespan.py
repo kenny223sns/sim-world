@@ -16,6 +16,9 @@ from app.db.base import engine, async_session_maker
 # 更新為領域驅動設計後的模型導入
 from app.domains.device.models.device_model import Device, DeviceRole  # 從領域模型導入
 
+# Import drone tracking models for database table creation
+from app.domains.drone_tracking.models.drone_tracking_model import DroneTrackingSession
+
 # 取消註釋 ground_station 相關導入
 from app.domains.satellite.models.ground_station_model import (
     GroundStation,
@@ -242,10 +245,22 @@ async def initialize_redis_client(app: FastAPI):
 async def lifespan(app: FastAPI):
     """Context manager for FastAPI startup and shutdown logic."""
     logger.info("Application startup sequence initiated...")
-    configure_gpu_cpu()
-    configure_matplotlib()
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    logger.info("Environment configured.")
+    
+    try:
+        logger.info("Configuring GPU/CPU...")
+        configure_gpu_cpu()
+        logger.info("GPU/CPU configuration completed.")
+        
+        logger.info("Configuring matplotlib...")
+        configure_matplotlib()
+        logger.info("Matplotlib configuration completed.")
+        
+        logger.info("Creating output directory...")
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        logger.info("Environment configured.")
+    except Exception as e:
+        logger.error(f"Error during environment configuration: {e}", exc_info=True)
+        raise
 
     logger.info("Database initialization sequence...")
     await create_db_and_tables()
