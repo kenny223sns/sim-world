@@ -76,21 +76,19 @@ SCENE_BACKGROUND_COLOR_RGB = [0.5, 0.5, 0.5]
 def check_scene_health(scene_name: str, xml_path: str) -> bool:
     """
     檢查場景的健康度，包括 XML 格式和幾何數據完整性
-    返回 True 表示健康，False 表示需要回退
+    返回 True 表示健康，False 表示有問題（將拋出異常）
     """
     try:
         # 檢查 1: XML 文件是否存在
         if not os.path.exists(xml_path):
-            logger.warning(f"場景 {scene_name} 的 XML 文件不存在: {xml_path}")
-            return False
+            raise FileNotFoundError(f"場景 {scene_name} 的 XML 文件不存在: {xml_path}")
 
-        # 檢查 2: XML 格式問題 - NTPU 和 Nanliao 有已知的 shape id 問題
-        if scene_name in ["NTPU", "Nanliao"]:
-            logger.warning(
-                f"⚠️  注意：{scene_name} 場景的 XML 文件格式不相容於 Sionna"
-                f"（shape 元素缺少 id 屬性），自動回退到 NYCU 場景。"
+        # 檢查 2: XML 格式問題 - NTPU 有已知的 shape id 問題
+        if scene_name in ["NTPU"]:
+            raise ValueError(
+                f"場景 {scene_name} 的 XML 文件格式不相容於 Sionna"
+                f"（shape 元素缺少 id 屬性）"
             )
-            return False
 
         # 檢查 3: 幾何數據完整性 - 檢查 PLY 文件大小
         if scene_name == "Lotus":
@@ -112,57 +110,42 @@ def check_scene_health(scene_name: str, xml_path: str) -> bool:
 
                 # 如果總大小太小或太多小文件，視為不健康
                 if total_size < 30000 or small_files > len(ply_files) * 0.8:
-                    logger.warning(
-                        f"⚠️  注意：{scene_name} 場景的幾何數據不完整"
-                        f"（總大小: {total_size} bytes，{small_files}/{len(ply_files)} 個小文件），"
-                        f"自動回退到 NYCU 場景以確保計算品質。"
+                    raise ValueError(
+                        f"場景 {scene_name} 的幾何數據不完整"
+                        f"（總大小: {total_size} bytes，{small_files}/{len(ply_files)} 個小文件）"
                     )
-                    return False
 
         return True
 
     except Exception as e:
-        logger.warning(f"檢查場景 {scene_name} 健康度時出錯: {e}，回退到 NYCU")
-        return False
+        logger.error(f"檢查場景 {scene_name} 健康度時出錯: {e}")
+        raise
 
 
 # --- 輔助函數：獲取場景 XML 路徑 ---
 def get_scene_xml_file_path(scene_name: str) -> str:
     """
-    根據場景名稱獲取對應的 XML 文件路徑，包含智能健康度檢查和回退機制
+    根據場景名稱獲取對應的 XML 文件路徑，直接返回錯誤而不回退
     """
-    try:
-        # 將前端路由參數映射到後端場景名稱
-        scene_mapping = {
-            "nycu": "NYCU",
-            "lotus": "Lotus",
-            "ntpu": "NTPU",
-            "nanliao": "Nanliao",
-        }
+    # 將前端路由參數映射到後端場景名稱
+    scene_mapping = {
+        "nycu": "NYCU",
+        "lotus": "Lotus",
+        "ntpu": "NTPU",
+        "nanliao": "Nanliaov2",
+    }
 
-        backend_scene_name = scene_mapping.get(scene_name.lower(), "NYCU")
-        original_scene_name = backend_scene_name
+    backend_scene_name = scene_mapping.get(scene_name.lower(), "NYCU")
+    original_scene_name = backend_scene_name
 
-        # 獲取 XML 路徑
-        try:
-            xml_path = get_scene_xml_path(backend_scene_name)
-        except Exception as e:
-            logger.warning(f"獲取場景檔案失敗: {e}，回退到 NYCU 場景")
-            backend_scene_name = "NYCU"
-            xml_path = get_scene_xml_path(backend_scene_name)
+    # 獲取 XML 路徑
+    xml_path = get_scene_xml_path(backend_scene_name)
 
-        # 健康度檢查
-        if not check_scene_health(original_scene_name, xml_path):
-            logger.info(f"場景 {original_scene_name} 健康度檢查失敗，回退到 NYCU 場景")
-            backend_scene_name = "NYCU"
-            xml_path = get_scene_xml_path(backend_scene_name)
+    # 健康度檢查 - 如果失敗會拋出異常
+    check_scene_health(original_scene_name, xml_path)
 
-        logger.info(f"場景 '{scene_name}' 映射到 XML 路徑: {xml_path}")
-        return str(xml_path)
-
-    except Exception as e:
-        logger.error(f"獲取場景 XML 路徑失敗，使用預設 NYCU: {e}")
-        return str(NYCU_XML_PATH)
+    logger.info(f"場景 '{scene_name}' 映射到 XML 路徑: {xml_path}")
+    return str(xml_path)
 
 
 # --- 通用函數：GPU 設置 ---
@@ -240,15 +223,19 @@ class DeviceData(BaseModel):
 
 
 # --- Helper Function for Pyrender Scene Setup ---
-def _setup_pyrender_scene_from_glb() -> Optional[pyrender.Scene]:
+def _setup_pyrender_scene_from_glb(scene_name: str = "NYCU") -> Optional[pyrender.Scene]:
     """Loads GLB, sets up pyrender scene, lights, camera. Returns Scene or None on error."""
-    logger.info(f"Setting up base pyrender scene from GLB: {NYCU_GLB_PATH}")
+    from app.core.config import get_scene_model_path
+    
+    # 根據場景名稱獲取對應的 GLB 文件路徑
+    glb_path = get_scene_model_path(scene_name)
+    logger.info(f"Setting up base pyrender scene from GLB: {glb_path}")
     try:
         # 1. Load GLB
-        if not os.path.exists(NYCU_GLB_PATH) or os.path.getsize(NYCU_GLB_PATH) == 0:
-            logger.error(f"GLB file not found or empty: {NYCU_GLB_PATH}")
+        if not os.path.exists(glb_path) or os.path.getsize(glb_path) == 0:
+            logger.error(f"GLB file not found or empty: {glb_path}")
             return None
-        scene_tm = trimesh.load(NYCU_GLB_PATH, force="scenes")
+        scene_tm = trimesh.load(glb_path, force="scenes")
         logger.info("GLB file loaded.")
 
         # 2. Create pyrender scene with background and ambient light
@@ -408,7 +395,7 @@ def _render_crop_and_save(
 
 
 # --- Refactor generate_empty_scene_image to use the helpers ---
-def generate_empty_scene_image(output_path: str):
+def generate_empty_scene_image(output_path: str, scene_name: str = "NYCU"):
     """Generates a cropped scene image by rendering the GLB file (using helpers)."""
     logger.info(f"Entering generate_empty_scene_image function, calling helpers...")
     try:
@@ -416,7 +403,7 @@ def generate_empty_scene_image(output_path: str):
         prepare_output_file(output_path, "空場景圖檔")
 
         # 1. Setup scene using helper
-        pr_scene = _setup_pyrender_scene_from_glb()  # Helper uses this bg color
+        pr_scene = _setup_pyrender_scene_from_glb(scene_name)  # Helper uses this bg color
         if pr_scene is None:
             return False
 
@@ -1864,7 +1851,7 @@ class SionnaSimulationService(SimulationServiceInterface):
 
     # --- 實現接口定義的方法 ---
 
-    async def generate_empty_scene_image(self, output_path: str) -> bool:
+    async def generate_empty_scene_image(self, output_path: str, scene_name: str = "NYCU") -> bool:
         """生成空場景圖像"""
         logger.info(
             f"SionnaSimulationService: Generating empty scene image at {output_path}"
@@ -1879,7 +1866,7 @@ class SionnaSimulationService(SimulationServiceInterface):
         _setup_gpu()
 
         # 設置 pyrender 場景
-        pr_scene = _setup_pyrender_scene_from_glb()
+        pr_scene = _setup_pyrender_scene_from_glb(scene_name)
         if not pr_scene:
             logger.error("無法設置 pyrender 場景")
             return False

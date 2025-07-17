@@ -9,7 +9,7 @@ class SimulationServiceInterface(ABC):
     """模擬服務接口，定義模擬服務的抽象方法"""
 
     @abstractmethod
-    async def generate_empty_scene_image(self, output_path: str) -> bool:
+    async def generate_empty_scene_image(self, output_path: str, scene_name: str = "NYCU") -> bool:
         """生成空場景圖像"""
         pass
 

@@ -43,13 +43,15 @@ def create_image_response(image_path: str, filename: str):
 
 
 @router.get("/scene-image", response_description="空場景圖像")
-async def get_scene_image():
+async def get_scene_image(
+    scene: str = Query("nycu", description="場景名稱 (nycu, lotus, ntpu, nanliao)"),
+):
     """產生並回傳只包含基本場景的圖像 (無設備)"""
-    logger.info("--- API Request: /scene-image (empty map) ---")
+    logger.info(f"--- API Request: /scene-image?scene={scene} (empty map) ---")
 
     try:
         output_path = "app/static/images/scene_empty.png"
-        success = await sionna_service.generate_empty_scene_image(output_path)
+        success = await sionna_service.generate_empty_scene_image(output_path, scene.upper())
 
         if not success:
             raise HTTPException(status_code=500, detail="無法產生空場景圖像")

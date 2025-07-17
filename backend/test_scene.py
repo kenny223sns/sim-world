@@ -11,7 +11,7 @@ from sionna.rt import load_scene
 
 def test_scene_loading():
     """測試加載不同場景"""
-    scenes = ["NYCU", "Lotus", "NTPU", "Nanliao"]
+    scenes = ["NYCU", "Lotus", "NTPU", "Nanliaov2"]
 
     for scene_name in scenes:
         try:

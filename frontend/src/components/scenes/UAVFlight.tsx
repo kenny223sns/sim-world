@@ -84,9 +84,9 @@ export default function UAVFlight({
     const deceleration = useRef(0.3)
     const maxSpeed = useRef(1.5)
 
-    const flightModes = ['cruise', 'hover', 'agile', 'explore'] as const
+    const flightModes = ['cruise', 'hover', 'agile', 'explore', 'zigzag'] as const
     type FlightMode = (typeof flightModes)[number]
-    const [flightMode, setFlightMode] = useState<FlightMode>('cruise')
+    const [flightMode, setFlightMode] = useState<FlightMode>('zigzag')
     const flightModeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
     const flightModeParams = useRef({
         cruise: {
@@ -117,10 +117,30 @@ export default function UAVFlight({
             heightVariation: 10,
             smoothingFactor: 0.8,
         },
+        zigzag: {
+            pathCurvature: 0.1,
+            speedFactor: 0.7,
+            turbulenceEffect: 0.1,
+            heightVariation: 3,
+            smoothingFactor: 0.9,
+        },
     })
     const [waypoints, setWaypoints] = useState<THREE.Vector3[]>([])
     const currentWaypoint = useRef(0)
     const pathCurvature = useRef(0.3 + Math.random() * 0.4)
+    
+    // Zig-Zag 專用狀態
+    const zigzagState = useRef({
+        currentRow: 0,
+        totalRows: 0,
+        isReturning: false,
+        rowHeight: 25,
+        columnWidth: 30,
+        areaWidth: 300,
+        areaHeight: 300,
+        startPosition: new THREE.Vector3(0, 0, 0),
+        completed: false
+    })
 
     useEffect(() => {
         const updateTurbulence = () => {
@@ -134,19 +154,26 @@ export default function UAVFlight({
         }
         updateTurbulence()
         const interval = setInterval(updateTurbulence, 2000)
-        const switchFlightMode = () => {
-            const nextMode =
-                flightModes[Math.floor(Math.random() * flightModes.length)]
-            setFlightMode(nextMode)
-            const modeParams = flightModeParams.current[nextMode]
-            pathCurvature.current = modeParams.pathCurvature
-            maxSpeed.current = 1.0 * modeParams.speedFactor
-            acceleration.current = 0.5 * modeParams.speedFactor
-            const duration = 10000 + Math.random() * 15000
-            if (flightModeTimer.current) clearTimeout(flightModeTimer.current)
-            flightModeTimer.current = setTimeout(switchFlightMode, duration)
-        }
-        flightModeTimer.current = setTimeout(switchFlightMode, 10000)
+        // 註釋掉隨機切換飛行模式的邏輯，只使用 Zig-Zag 模式
+        // const switchFlightMode = () => {
+        //     const nextMode =
+        //         flightModes[Math.floor(Math.random() * flightModes.length)]
+        //     setFlightMode(nextMode)
+        //     const modeParams = flightModeParams.current[nextMode]
+        //     pathCurvature.current = modeParams.pathCurvature
+        //     maxSpeed.current = 1.0 * modeParams.speedFactor
+        //     acceleration.current = 0.5 * modeParams.speedFactor
+        //     const duration = 10000 + Math.random() * 15000
+        //     if (flightModeTimer.current) clearTimeout(flightModeTimer.current)
+        //     flightModeTimer.current = setTimeout(switchFlightMode, duration)
+        // }
+        // flightModeTimer.current = setTimeout(switchFlightMode, 10000)
+        
+        // 設置 Zig-Zag 模式的參數
+        const modeParams = flightModeParams.current[flightMode]
+        pathCurvature.current = modeParams.pathCurvature
+        maxSpeed.current = 1.0 * modeParams.speedFactor
+        acceleration.current = 0.5 * modeParams.speedFactor
         return () => {
             clearInterval(interval)
             if (flightModeTimer.current) clearTimeout(flightModeTimer.current)
@@ -216,6 +243,58 @@ export default function UAVFlight({
         }
         return path
     }
+    
+    const generateZigZagPath = () => {
+        const state = zigzagState.current
+        const basePos = initialPosition.current
+        const path: THREE.Vector3[] = []
+        
+        // 初始化 Zig-Zag 參數
+        if (state.currentRow === 0 && !state.completed) {
+            state.startPosition.copy(basePos)
+            state.totalRows = Math.floor(state.areaHeight / state.rowHeight)
+        }
+        
+        // 如果已完成所有行，重新開始
+        if (state.currentRow >= state.totalRows || state.completed) {
+            state.currentRow = 0
+            state.isReturning = false
+            state.completed = false
+            state.startPosition.copy(basePos)
+        }
+        
+        // 計算當前行的起始和結束位置
+        const currentY = basePos.y + (Math.random() - 0.5) * state.rowHeight * 0.3
+        const currentZ = state.startPosition.z + (state.currentRow * state.rowHeight) - (state.areaHeight / 2)
+        
+        let startX, endX
+        if (state.isReturning) {
+            // 返回行：從右到左
+            startX = state.startPosition.x + (state.areaWidth / 2)
+            endX = state.startPosition.x - (state.areaWidth / 2)
+        } else {
+            // 前進行：從左到右
+            startX = state.startPosition.x - (state.areaWidth / 2)
+            endX = state.startPosition.x + (state.areaWidth / 2)
+        }
+        
+        // 生成這一行的路徑點
+        const pointsInRow = Math.floor(state.areaWidth / state.columnWidth)
+        for (let i = 0; i <= pointsInRow; i++) {
+            const t = i / pointsInRow
+            const x = startX + (endX - startX) * t
+            const y = currentY + (Math.random() - 0.5) * 2 // 小幅度高度變化
+            const z = currentZ + (Math.random() - 0.5) * 5 // 小幅度深度變化
+            path.push(new THREE.Vector3(x, y, z))
+        }
+        
+        // 更新狀態
+        state.currentRow++
+        state.isReturning = !state.isReturning
+        
+        return path
+    }
+    
     const generateNewTarget = () => {
         const modeParams = flightModeParams.current[flightMode]
         let distance
@@ -233,6 +312,10 @@ export default function UAVFlight({
                 distance = 150 + Math.random() * 200
                 heightRange = [60, 150]
                 break
+            case 'zigzag':
+                // Zig-Zag 模式不需要隨機目標，直接返回下一個 Z 字形路徑點
+                const zigzagPath = generateZigZagPath()
+                return zigzagPath.length > 0 ? zigzagPath[zigzagPath.length - 1] : initialPosition.current
             case 'cruise':
             default:
                 distance = 120 + Math.random() * 150
@@ -257,15 +340,27 @@ export default function UAVFlight({
         return current.distanceTo(target) < threshold
     }
     const generatePath = () => {
-        const start = currentPosition
-        const end = generateNewTarget()
-        const distance = start.distanceTo(end)
-        const points = Math.max(8, Math.min(20, Math.floor(distance / 15)))
-        const newWaypoints = generateBezierPath(start, end, points)
-        setWaypoints(newWaypoints)
-        currentWaypoint.current = 0
-        setTargetPosition(end)
-        return newWaypoints
+        if (flightMode === 'zigzag') {
+            // Zig-Zag 模式使用專門的路徑生成
+            const newWaypoints = generateZigZagPath()
+            setWaypoints(newWaypoints)
+            currentWaypoint.current = 0
+            if (newWaypoints.length > 0) {
+                setTargetPosition(newWaypoints[newWaypoints.length - 1])
+            }
+            return newWaypoints
+        } else {
+            // 其他模式使用原有的 Bezier 路徑生成
+            const start = currentPosition
+            const end = generateNewTarget()
+            const distance = start.distanceTo(end)
+            const points = Math.max(8, Math.min(20, Math.floor(distance / 15)))
+            const newWaypoints = generateBezierPath(start, end, points)
+            setWaypoints(newWaypoints)
+            currentWaypoint.current = 0
+            setTargetPosition(end)
+            return newWaypoints
+        }
     }
     useEffect(() => {
         // 設置警告攔截器以忽略動畫綁定錯誤

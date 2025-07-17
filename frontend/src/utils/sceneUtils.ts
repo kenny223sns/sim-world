@@ -7,7 +7,7 @@ export const SCENE_MAPPING = {
     nycu: 'NYCU',
     lotus: 'Lotus',
     ntpu: 'NTPU',
-    nanliao: 'Nanliao',
+    nanliao: 'Nanliaov2',
 } as const
 
 // 場景顯示名稱映射
@@ -78,8 +78,8 @@ export function getSceneTextureName(sceneParam: string): string {
             return 'EXPORT_GOOGLE_SAT_WM.png'  // 假設 Lotus 也使用相同的紋理檔案
         case 'NTPU':
             return 'EXPORT_GOOGLE_SAT_WM.png'  // 臺北大學使用相同的紋理檔案
-        case 'Nanliao':
-            return 'EXPORT_GOOGLE_SAT_WM.png'  // 南寮漁港使用相同的紋理檔案
+        case 'Nanliaov2':
+            return 'EXPORT_GOOGLE_SAT_WM.004.png'  // 南寮漁港使用不同的紋理檔案
         default:
             return 'EXPORT_GOOGLE_SAT_WM.png'
     }
