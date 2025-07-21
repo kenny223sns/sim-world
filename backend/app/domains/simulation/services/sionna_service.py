@@ -132,7 +132,7 @@ def get_scene_xml_file_path(scene_name: str) -> str:
         "nycu": "NYCU",
         "lotus": "Lotus",
         "ntpu": "NTPU",
-        "nanliao": "Nanliaov2",
+        "nanliao": "nnn",
     }
 
     backend_scene_name = scene_mapping.get(scene_name.lower(), "NYCU")

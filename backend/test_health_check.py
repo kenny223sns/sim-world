@@ -24,7 +24,7 @@ def test_health_check():
             "nycu": "NYCU",
             "lotus": "Lotus",
             "ntpu": "NTPU",
-            "nanliao": "Nanliaov2",
+            "nanliao": "nnn",
         }
         backend_scene_name = scene_mapping.get(scene_name.lower(), "NYCU")
 
