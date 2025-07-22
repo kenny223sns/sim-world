@@ -1581,6 +1581,8 @@ async def generate_iss_map(
     min_distance: int = 3,
     cell_size: float = 4.0,
     samples_per_tx: int = 10**7,
+    position_override: dict = None,
+    force_refresh: bool = False,
 ) -> bool:
     """
     生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測
@@ -1619,6 +1621,94 @@ async def generate_iss_map(
             skip=0, limit=100, role=DeviceRole.RECEIVER.value, active_only=True
         )
 
+        # 生成包含設備座標的快取 key
+        import hashlib
+        import json
+        import time
+        
+        # 提取所有設備的位置和功率信息來生成快取 key
+        cache_data = {
+            "scene_name": scene_name,
+            "scene_size": scene_size,
+            "altitude": altitude,
+            "cell_size": cell_size,
+            "samples_per_tx": samples_per_tx,
+            "cfar_threshold_percentile": cfar_threshold_percentile,
+            "gaussian_sigma": gaussian_sigma,
+            "min_distance": min_distance,
+            "desired_devices": [
+                {
+                    "name": tx.name,
+                    "position": [tx.position_x, tx.position_y, tx.position_z],
+                    "power_dbm": tx.power_dbm
+                } for tx in active_desired
+            ],
+            "jammer_devices": [
+                {
+                    "name": jammer.name,
+                    "position": [jammer.position_x, jammer.position_y, jammer.position_z],
+                    "power_dbm": jammer.power_dbm
+                } for jammer in active_jammers
+            ],
+            "receiver_devices": [
+                {
+                    "name": rx.name,
+                    "position": [rx.position_x, rx.position_y, rx.position_z]
+                } for rx in active_receivers
+            ]
+        }
+        
+        # 應用位置覆蓋參數來修改快取 key
+        if position_override:
+            logger.info(f"應用位置覆蓋參數: {position_override}")
+            
+            # 覆蓋 TX 位置
+            if 'tx' in position_override and cache_data["desired_devices"]:
+                for device in cache_data["desired_devices"]:
+                    device["position"] = [
+                        position_override['tx']['x'],
+                        position_override['tx']['y'], 
+                        position_override['tx']['z']
+                    ]
+                    logger.info(f"覆蓋 TX 設備 {device['name']} 位置: {device['position']}")
+            
+            # 覆蓋 Jammer 位置  
+            if 'jammers' in position_override and cache_data["jammer_devices"]:
+                jammer_positions = position_override['jammers']
+                for i, device in enumerate(cache_data["jammer_devices"]):
+                    if i < len(jammer_positions):
+                        # 使用對應索引的位置
+                        pos = jammer_positions[i]
+                        device["position"] = [pos['x'], pos['y'], pos['z']]
+                        logger.info(f"覆蓋 Jammer 設備 {device['name']} 位置: {device['position']}")
+                    else:
+                        logger.warning(f"Jammer 設備 {device['name']} 沒有對應的覆蓋位置，使用原始位置")
+            
+            # 加入位置覆蓋資訊到快取 key 中
+            cache_data["position_override"] = position_override
+        
+        # 如果 force_refresh，在快取 key 中加入時間戳避免快取命中
+        if force_refresh:
+            cache_data["force_refresh_timestamp"] = time.time()
+            logger.info("強制重新生成地圖 - 跳過快取")
+        
+        # 生成快取 key
+        cache_key_str = json.dumps(cache_data, sort_keys=True)
+        cache_key = hashlib.md5(cache_key_str.encode()).hexdigest()
+        logger.info(f"生成快取 key: {cache_key[:16]}... (基於 {len(active_desired)} 發射器, {len(active_jammers)} 干擾器, {len(active_receivers)} 接收器位置)")
+        
+        # 檢查全域快取 (這裡假設有一個全域的快取字典)
+        if not hasattr(generate_iss_map, '_iss_cache'):
+            generate_iss_map._iss_cache = {}
+            
+        # 檢查快取 (force_refresh 會因為時間戳導致快取未命中)
+        cache_hit = cache_key in generate_iss_map._iss_cache
+        if cache_hit:
+            cached_data = generate_iss_map._iss_cache[cache_key]
+            logger.info("✓ 使用快取的 ISS 地圖數據 - 設備位置未變更")
+        else:
+            logger.info("✗ 無快取數據或設備位置已變更，開始計算新的無線電地圖...")
+
         # 檢查是否有足夠的設備
         if not active_jammers:
             logger.error("沒有活動的干擾器，無法生成 ISS 地圖")
@@ -1635,152 +1725,209 @@ async def generate_iss_map(
                 [receiver.position_x, receiver.position_y, receiver.position_z],
             )
 
-        # 構建 TX_LIST 使用更新的格式
-        tx_list = []
-
-        # 添加發射器 (desired)
-        for tx in active_desired:
-            tx_info = {
-                "name": tx.name,
-                "position": [tx.position_x, tx.position_y, tx.position_z],
-                "orientation": [tx.orientation_x, tx.orientation_y, tx.orientation_z],
-                "role": "desired",
-                "power_dbm": tx.power_dbm
-            }
-            tx_list.append(tx_info)
-            logger.info(
-                f"添加發射器: {tx_info['name']}, 位置: {tx_info['position']}, 方向: {tx_info['orientation']}, 功率: {tx_info['power_dbm']} dBm"
-            )
-
-        # 添加干擾器 (jammer)
-        for jammer in active_jammers:
-            jammer_info = {
-                "name": jammer.name,
-                "position": [jammer.position_x, jammer.position_y, jammer.position_z],
-                "orientation": [jammer.orientation_x, jammer.orientation_y, jammer.orientation_z],
-                "role": "jammer",
-                "power_dbm": jammer.power_dbm
-            }
-            tx_list.append(jammer_info)
-            logger.info(
-                f"添加干擾器: {jammer_info['name']}, 位置: {jammer_info['position']}, 方向: {jammer_info['orientation']}, 功率: {jammer_info['power_dbm']} dBm"
-            )
-
-        # 天線配置
-        TX_ARRAY_CONFIG = {
-            "num_rows": 1,
-            "num_cols": 1,
-            "vertical_spacing": 0.5,
-            "horizontal_spacing": 0.5,
-            "pattern": "iso",
-            "polarization": "V"
-        }
-        RX_ARRAY_CONFIG = TX_ARRAY_CONFIG
-
-        # 載入場景
-        scene_xml_path = get_scene_xml_file_path(scene_name)
-        logger.info(f"從 {scene_xml_path} 加載場景")
-        
-        try:
-            scene = load_scene(scene_xml_path)
-        except Exception as e:
-            logger.warning(f"無法載入自定義場景 {scene_xml_path}: {e}")
-            logger.info("使用內建場景...")
-            scene = None
-
-        if scene is None:
-            logger.error("無法建立場景")
-            return False
-
-        # 設置天線陣列
-        scene.tx_array = PlanarArray(**TX_ARRAY_CONFIG)
-        scene.rx_array = PlanarArray(**RX_ARRAY_CONFIG)
-
-        # 清除現有的發射器和接收器
-        for tx_name in list(scene.transmitters):
-            scene.remove(tx_name)
-        for rx_name in list(scene.receivers):
-            scene.remove(rx_name)
-
-        # 添加發射器
-        transmitters = []
-        for tx_info in tx_list:
-            tx = SionnaTransmitter(
-                name=tx_info["name"],
-                position=tx_info["position"],
-                orientation=tx_info["orientation"],
-                power_dbm=tx_info["power_dbm"]
-            )
-            # 設置角色屬性
-            tx.role = tx_info["role"]
-            scene.add(tx)
-            transmitters.append(tx)
-
-        # 添加接收器
-        rx_name, rx_pos = rx_config
-        rx = SionnaReceiver(name=rx_name, position=rx_pos)
-        scene.add(rx)
-
-        # 計算無線電地圖
-        logger.info("計算無線電地圖...")
-        rm_solver = RadioMapSolver()
-        rm = rm_solver(scene,
-                       max_depth=20,           # Maximum number of ray scene interactions
-                       samples_per_tx=samples_per_tx, 
-                       cell_size=(cell_size, cell_size),      # Resolution of the radio map
-                       center=[0, 0, 1.5],      # Center of the radio map
-                       size=[512, 512],       # Total size of the radio map
-                       orientation=[0, 0, 0],
-                       refraction=True,
-                       specular_reflection=True,
-                       diffuse_reflection=True)
-
-        # 提取資料
-        logger.info("提取無線電地圖數據...")
-        # 獲取cell中心座標
-        cc = rm.cell_centers.numpy()
-        x_unique = cc[0, :, 0]
-        y_unique = cc[:, 0, 1]
-
-        # 獲取所有發射器
-        all_txs = [scene.get(name) for name in scene.transmitters]
-
-        # 分組：期望發射器和干擾器
-        idx_des = [i for i, tx in enumerate(all_txs) if tx.role == 'desired']
-        idx_jam = [i for i, tx in enumerate(all_txs) if tx.role == 'jammer']
-        logger.info(f"干擾器索引: {idx_jam}")
-
-        # 獲取RSS（接收信號強度）
-        WSS = rm.rss[:].numpy()
-        TSS = np.sum(WSS, axis=0)  # 將所有發射器的RSS加總
-        logger.info(f"RSS形狀: {TSS.shape}")
-        DSS = np.sum(WSS[idx_des,:,:], axis=0) if idx_des else np.zeros_like(TSS)
-        ISS = np.sum(WSS[idx_jam,:,:], axis=0) if idx_jam else np.zeros_like(TSS)
-
-        # 使用改進的2D CFAR檢測干擾源位置
-        iss_dbm = 10 * np.log10(ISS / 1e-3)
-
-        # 平滑化處理（選擇性）
-        ISS_smooth = gaussian_filter(iss_dbm, sigma=gaussian_sigma)
-
-        # 2D-CFAR 偵測
-        # 先做最大值過濾 (局部最大值)
-        local_max = maximum_filter(ISS_smooth, size=5)
-        peaks = (ISS_smooth == local_max)
-
-        # 設定強度門檻（百分位數）
-        threshold = np.percentile(ISS_smooth, cfar_threshold_percentile)
-
-        # 使用 peak_local_max 找出高於門檻的最大值座標
-        if peak_local_max is not None:
-            peak_coords = peak_local_max(
-                ISS_smooth,
-                min_distance=min_distance,           # 限制峰與峰最小距離
-                threshold_abs=threshold   # 絕對強度門檻
-            )
+        # 快取邏輯分支
+        if cache_hit:
+            # 使用快取數據
+            cached_data = generate_iss_map._iss_cache[cache_key]
+            iss_dbm = cached_data['iss_dbm']
+            x_unique = cached_data['x_unique']
+            y_unique = cached_data['y_unique']
+            peak_coords = cached_data['peak_coords']
+            all_txs_info = cached_data['all_txs_info']
+            
+            logger.info(f"從快取載入 ISS 地圖數據: {iss_dbm.shape}")
         else:
-            # 簡化版本的峰值檢測
-            peak_coords = np.column_stack(np.where((peaks) & (ISS_smooth > threshold)))
+            # 需要重新計算
+            # 構建 TX_LIST 使用更新的格式
+            tx_list = []
+
+            # 添加發射器 (desired)
+            for tx in active_desired:
+                # 檢查是否有位置覆蓋
+                if position_override and 'tx' in position_override:
+                    position = [position_override['tx']['x'], position_override['tx']['y'], position_override['tx']['z']]
+                    logger.info(f"使用覆蓋位置 TX: {position}")
+                else:
+                    position = [tx.position_x, tx.position_y, tx.position_z]
+                
+                tx_info = {
+                    "name": tx.name,
+                    "position": position,
+                    "orientation": [tx.orientation_x, tx.orientation_y, tx.orientation_z],
+                    "role": "desired",
+                    "power_dbm": tx.power_dbm
+                }
+                tx_list.append(tx_info)
+                logger.info(
+                    f"添加發射器: {tx_info['name']}, 位置: {tx_info['position']}, 方向: {tx_info['orientation']}, 功率: {tx_info['power_dbm']} dBm"
+                )
+
+            # 添加干擾器 (jammer)
+            for i, jammer in enumerate(active_jammers):
+                # 檢查是否有位置覆蓋
+                if position_override and 'jammers' in position_override:
+                    jammer_positions = position_override['jammers']
+                    if i < len(jammer_positions):
+                        pos = jammer_positions[i]
+                        position = [pos['x'], pos['y'], pos['z']]
+                        logger.info(f"使用覆蓋位置 Jammer {i+1}: {position}")
+                    else:
+                        position = [jammer.position_x, jammer.position_y, jammer.position_z]
+                        logger.info(f"Jammer {i+1} 沒有覆蓋位置，使用原始位置: {position}")
+                else:
+                    position = [jammer.position_x, jammer.position_y, jammer.position_z]
+                
+                jammer_info = {
+                    "name": jammer.name,
+                    "position": position,
+                    "orientation": [jammer.orientation_x, jammer.orientation_y, jammer.orientation_z],
+                    "role": "jammer",
+                    "power_dbm": jammer.power_dbm
+                }
+                tx_list.append(jammer_info)
+                logger.info(
+                    f"添加干擾器: {jammer_info['name']}, 位置: {jammer_info['position']}, 方向: {jammer_info['orientation']}, 功率: {jammer_info['power_dbm']} dBm"
+                )
+
+            # 天線配置
+            TX_ARRAY_CONFIG = {
+                "num_rows": 1,
+                "num_cols": 1,
+                "vertical_spacing": 0.5,
+                "horizontal_spacing": 0.5,
+                "pattern": "iso",
+                "polarization": "V"
+            }
+            RX_ARRAY_CONFIG = TX_ARRAY_CONFIG
+
+            # 載入場景
+            scene_xml_path = get_scene_xml_file_path(scene_name)
+            logger.info(f"從 {scene_xml_path} 加載場景")
+            
+            try:
+                scene = load_scene(scene_xml_path)
+            except Exception as e:
+                logger.warning(f"無法載入自定義場景 {scene_xml_path}: {e}")
+                logger.info("使用內建場景...")
+                scene = None
+
+            if scene is None:
+                logger.error("無法建立場景")
+                return False
+
+            # 設置天線陣列
+            scene.tx_array = PlanarArray(**TX_ARRAY_CONFIG)
+            scene.rx_array = PlanarArray(**RX_ARRAY_CONFIG)
+
+            # 清除現有的發射器和接收器
+            for tx_name in list(scene.transmitters):
+                scene.remove(tx_name)
+            for rx_name in list(scene.receivers):
+                scene.remove(rx_name)
+
+            # 添加發射器
+            transmitters = []
+            for tx_info in tx_list:
+                tx = SionnaTransmitter(
+                    name=tx_info["name"],
+                    position=tx_info["position"],
+                    orientation=tx_info["orientation"],
+                    power_dbm=tx_info["power_dbm"]
+                )
+                # 設置角色屬性
+                tx.role = tx_info["role"]
+                scene.add(tx)
+                transmitters.append(tx)
+
+            # 添加接收器
+            rx_name, rx_pos = rx_config
+            rx = SionnaReceiver(name=rx_name, position=rx_pos)
+            scene.add(rx)
+
+            # 計算無線電地圖
+            logger.info("計算無線電地圖...")
+            rm_solver = RadioMapSolver()
+            rm = rm_solver(scene,
+                           max_depth=20,           # Maximum number of ray scene interactions
+                           samples_per_tx=samples_per_tx, 
+                           cell_size=(cell_size, cell_size),      # Resolution of the radio map
+                           center=[0, 0, 1.5],      # Center of the radio map
+                           size=[512, 512],       # Total size of the radio map
+                           orientation=[0, 0, 0],
+                           refraction=True,
+                           specular_reflection=True,
+                           diffuse_reflection=True)
+
+            # 提取資料
+            logger.info("提取無線電地圖數據...")
+            # 獲取cell中心座標
+            cc = rm.cell_centers.numpy()
+            x_unique = cc[0, :, 0]
+            y_unique = cc[:, 0, 1]
+
+            # 獲取所有發射器
+            all_txs = [scene.get(name) for name in scene.transmitters]
+
+            # 分組：期望發射器和干擾器
+            idx_des = [i for i, tx in enumerate(all_txs) if tx.role == 'desired']
+            idx_jam = [i for i, tx in enumerate(all_txs) if tx.role == 'jammer']
+            logger.info(f"干擾器索引: {idx_jam}")
+
+            # 獲取RSS（接收信號強度）
+            WSS = rm.rss[:].numpy()
+            TSS = np.sum(WSS, axis=0)  # 將所有發射器的RSS加總
+            logger.info(f"RSS形狀: {TSS.shape}")
+            DSS = np.sum(WSS[idx_des,:,:], axis=0) if idx_des else np.zeros_like(TSS)
+            ISS = np.sum(WSS[idx_jam,:,:], axis=0) if idx_jam else np.zeros_like(TSS)
+
+            # 使用改進的2D CFAR檢測干擾源位置
+            iss_dbm = 10 * np.log10(ISS / 1e-3)
+
+            # 平滑化處理（選擇性）
+            ISS_smooth = gaussian_filter(iss_dbm, sigma=gaussian_sigma)
+
+            # 2D-CFAR 偵測
+            # 先做最大值過濾 (局部最大值)
+            local_max = maximum_filter(ISS_smooth, size=5)
+            peaks = (ISS_smooth == local_max)
+
+            # 設定強度門檻（百分位數）
+            threshold = np.percentile(ISS_smooth, cfar_threshold_percentile)
+
+            # 使用 peak_local_max 找出高於門檻的最大值座標
+            if peak_local_max is not None:
+                peak_coords = peak_local_max(
+                    ISS_smooth,
+                    min_distance=min_distance,           # 限制峰與峰最小距離
+                    threshold_abs=threshold   # 絕對強度門檻
+                )
+            else:
+                # 簡化版本的峰值檢測
+                peak_coords = np.column_stack(np.where((peaks) & (ISS_smooth > threshold)))
+
+            # 保存發射器信息用於可視化
+            all_txs_info = [
+                {
+                    "name": tx.name,
+                    "position": tx.position,
+                    "role": tx.role
+                }
+                for tx in all_txs
+            ]
+            
+            # 保存計算結果到快取
+            logger.info("保存計算結果到快取...")
+            generate_iss_map._iss_cache[cache_key] = {
+                'iss_dbm': iss_dbm,
+                'x_unique': x_unique,
+                'y_unique': y_unique,
+                'peak_coords': peak_coords,
+                'all_txs_info': all_txs_info,
+                'timestamp': time.time()
+            }
+            logger.info(f"快取已更新 - 快取大小: {len(generate_iss_map._iss_cache)}")
+
+        # 在此處，不管是從快取還是新計算的數據都已準備好
 
         # 可視化
         logger.info("生成 ISS 地圖可視化")
@@ -1795,18 +1942,20 @@ async def generate_iss_map(
             peak_y = y_unique[peak_coords[:, 0]]
             plt.scatter(peak_x, peak_y, color='r', marker='+', label='2D-CFAR Peaks')
 
+        # 繪製設備位置 - 使用快取友好的數據結構
         # 期望發射器（藍色三角形）
-        for tx in all_txs:
-            if tx.role == 'desired':
-                plt.scatter(tx.position[0], tx.position[1], c='red', marker='^', s=100, label='Desired Tx')
+        for tx_info in all_txs_info:
+            if tx_info['role'] == 'desired':
+                plt.scatter(tx_info['position'][0], tx_info['position'][1], c='blue', marker='^', s=100, label='Desired Tx')
         
         # 干擾器（紅色X）
-        for tx in all_txs:
-            if tx.role == 'jammer':
-                plt.scatter(tx.position[0], tx.position[1], c='red', marker='x', s=100, label='Jammer')
+        for tx_info in all_txs_info:
+            if tx_info['role'] == 'jammer':
+                plt.scatter(tx_info['position'][0], tx_info['position'][1], c='red', marker='x', s=100, label='Jammer')
         
         # 接收器（綠色圓圈）
-        plt.scatter(rx.position[0], rx.position[1], c='green', marker='o', s=50, label='Rx')
+        rx_name, rx_pos = rx_config
+        plt.scatter(rx_pos[0], rx_pos[1], c='green', marker='o', s=50, label='Rx')
 
         plt.tight_layout()
         plt.legend()
@@ -1945,6 +2094,8 @@ class SionnaSimulationService(SimulationServiceInterface):
         min_distance: int = 3,
         cell_size: float = 1.0,
         samples_per_tx: int = 10**7,
+        position_override: dict = None,
+        force_refresh: bool = False,
     ) -> bool:
         """生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測"""
         logger.info(
@@ -1962,6 +2113,8 @@ class SionnaSimulationService(SimulationServiceInterface):
             min_distance=min_distance,
             cell_size=cell_size,
             samples_per_tx=samples_per_tx,
+            position_override=position_override,
+            force_refresh=force_refresh,
         )
 
     async def run_simulation(

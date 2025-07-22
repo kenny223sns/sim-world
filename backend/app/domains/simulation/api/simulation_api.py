@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -170,15 +170,49 @@ async def get_channel_response(
 async def get_iss_map(
     session: AsyncSession = Depends(get_session),
     scene: str = Query("nycu", description="場景名稱 (nycu, lotus)"),
+    tx_x: Optional[float] = Query(None, description="TX位置X座標 (米)"),
+    tx_y: Optional[float] = Query(None, description="TX位置Y座標 (米)"),
+    tx_z: Optional[float] = Query(None, description="TX位置Z座標 (米)"),
+    jammer: List[str] = Query([], description="Jammer位置列表 (格式: x,y,z)"),
+    force_refresh: bool = Query(False, description="強制重新生成地圖，忽略快取"),
 ):
     """產生並回傳干擾信號檢測地圖 (使用 2D-CFAR 技術)"""
-    logger.info(f"--- API Request: /iss-map?scene={scene} ---")
+    logger.info(f"--- API Request: /iss-map?scene={scene}, force_refresh={force_refresh} ---")
+    if tx_x is not None and tx_y is not None:
+        logger.info(f"TX位置參數: ({tx_x}, {tx_y}, {tx_z})")
+    if jammer:
+        for i, jam_pos_str in enumerate(jammer):
+            logger.info(f"Jammer {i+1} 位置參數: {jam_pos_str}")
 
     try:
+        # 建構位置覆蓋字典
+        position_override = {}
+        if tx_x is not None and tx_y is not None:
+            position_override['tx'] = {
+                'x': tx_x,
+                'y': tx_y, 
+                'z': tx_z if tx_z is not None else 30.0
+            }
+        
+        # 處理多個 jammer 位置
+        if jammer:
+            jammer_positions = []
+            for jam_pos_str in jammer:
+                try:
+                    x, y, z = map(float, jam_pos_str.split(','))
+                    jammer_positions.append({'x': x, 'y': y, 'z': z})
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"無效的 jammer 位置格式: {jam_pos_str}, 錯誤: {e}")
+                    continue
+            if jammer_positions:
+                position_override['jammers'] = jammer_positions
+            
         success = await sionna_service.generate_iss_map(
             session=session, 
             output_path=str(ISS_MAP_IMAGE_PATH),
-            scene_name=scene
+            scene_name=scene,
+            position_override=position_override,
+            force_refresh=force_refresh
         )
 
         if not success:

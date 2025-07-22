@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ViewerProps } from '../../types/viewer'
 import { ApiRoutes } from '../../config/apiRoutes'
+import { useDevices } from '../../hooks/useDevices'
 
 // 干擾信號檢測地圖顯示組件
 const ISSViewer: React.FC<ViewerProps> = ({
@@ -17,6 +18,9 @@ const ISSViewer: React.FC<ViewerProps> = ({
 
     const imageUrlRef = useRef<string | null>(null)
     const API_PATH = ApiRoutes.simulations.getISSMap
+    
+    // 使用 useDevices hook 來獲取當前設備位置
+    const { tempDevices, hasTempDevices } = useDevices()
 
     const updateTimestamp = useCallback(() => {
         const now = new Date()
@@ -32,8 +36,38 @@ const ISSViewer: React.FC<ViewerProps> = ({
         setIsLoading(true)
         setError(null)
 
-        // 添加scene和timestamp參數
-        const apiUrl = `${API_PATH}?scene=${currentScene}&t=${new Date().getTime()}`
+        // 從設備中獲取 TX 和所有 Jammer 位置
+        const txDevice = tempDevices.find(device => 
+            device.role === 'desired' && device.active
+        )
+        const jammerDevices = tempDevices.filter(device => 
+            device.role === 'jammer' && device.active
+        )
+
+        // 構建 API 參數
+        const params = new URLSearchParams({
+            scene: currentScene,
+            t: new Date().getTime().toString(),
+            force_refresh: 'true' // 強制刷新以獲取最新位置的地圖
+        })
+
+        // 添加 TX 位置參數（如果存在）
+        if (txDevice) {
+            params.append('tx_x', txDevice.position_x.toString())
+            params.append('tx_y', txDevice.position_y.toString())
+            params.append('tx_z', txDevice.position_z.toString())
+            console.log(`ISS Map: 使用 TX 位置 (${txDevice.position_x}, ${txDevice.position_y}, ${txDevice.position_z})`)
+        }
+
+        // 添加所有 Jammer 位置參數
+        jammerDevices.forEach((jammer, index) => {
+            const positionStr = `${jammer.position_x},${jammer.position_y},${jammer.position_z}`
+            params.append('jammer', positionStr)
+            console.log(`ISS Map: 使用 Jammer ${index + 1} 位置 (${jammer.position_x}, ${jammer.position_y}, ${jammer.position_z})`)
+        })
+
+        const apiUrl = `${API_PATH}?${params.toString()}`
+        console.log('ISS Map API URL:', apiUrl)
 
         fetch(apiUrl)
             .then((response) => {
@@ -81,7 +115,7 @@ const ISSViewer: React.FC<ViewerProps> = ({
                     }, 2000) // 2秒後重試
                 }
             })
-    }, [updateTimestamp, retryCount, currentScene])
+    }, [updateTimestamp, retryCount, currentScene, tempDevices])
 
     useEffect(() => {
         reportRefreshHandlerToNavbar(loadISSMapImage)
@@ -107,6 +141,19 @@ const ISSViewer: React.FC<ViewerProps> = ({
 
     return (
         <div className="image-viewer iss-image-container">
+            {hasTempDevices && (
+                <div style={{
+                    padding: '10px',
+                    marginBottom: '10px',
+                    backgroundColor: '#ffa500',
+                    color: 'white',
+                    borderRadius: '4px',
+                    fontSize: '14px',
+                    fontWeight: 'bold'
+                }}>
+                    ⚠️ 偵測到設備位置修改，請點擊 Sidebar 底部的「套用」按鈕以查看更新後的無線電地圖！
+                </div>
+            )}
             {isLoading && (
                 <div className="loading">正在計算干擾信號檢測地圖並執行 2D-CFAR 檢測...</div>
             )}
