@@ -1,12 +1,15 @@
-import { Suspense, useRef, useCallback, useEffect } from 'react'
+import { Suspense, useRef, useCallback, useEffect, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { ContactShadows, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import Starfield from '../ui/Starfield'
 import MainScene from './MainScene'
+import SparseISSCanvas from './SparseISSCanvas'
 import { Device } from '../../types/device'
 import { VisibleSatelliteInfo } from '../../types/satellite'
 import { UseDroneTrackingReturn } from '../../hooks/useDroneTracking'
+import { useSparseUAVScan } from '../../hooks/useSparseUAVScan'
+import { worldToCanvasPct, debugCoordTransform, getAxisInfo } from '../../utils/coordUtils'
 
 // 添加圖例组件
 const SatelliteLegend = () => {
@@ -60,6 +63,23 @@ export default function SceneView({
     droneTracking,
 }: SceneViewProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
+    
+    // Sparse scan state
+    const [showSparseScan, setShowSparseScan] = useState(false)
+    const [scanParams, setScanParams] = useState({
+        step_x: 4,
+        step_y: 4,
+        speed: 2
+    })
+    
+    // Use sparse UAV scan hook
+    const sparseScan = useSparseUAVScan({
+        scene: sceneName || 'Nanliao',
+        step_x: scanParams.step_x,
+        step_y: scanParams.step_y,
+        speed: scanParams.speed,
+        autoStart: false
+    })
     
     // Use passed droneTracking or create fallback
     const { isTracking, recordPosition } = droneTracking || { isTracking: false, recordPosition: async () => false }
@@ -215,6 +235,315 @@ export default function SceneView({
             {/* 添加衛星圖例 - 只有在有衛星資料時才顯示 */}
             {satellites && satellites.length > 0 && <SatelliteLegend />}
 
+            {/* Sparse UAV Scan Controls */}
+            <div className="sparse-scan-controls">
+                <button 
+                    onClick={() => setShowSparseScan(!showSparseScan)}
+                    className="toggle-sparse-scan"
+                >
+                    {showSparseScan ? '隱藏' : '顯示'} UAV稀疏掃描
+                </button>
+                
+                {showSparseScan && (
+                    <div className="sparse-scan-panel">
+                        <h4>UAV稀疏ISS掃描</h4>
+                        
+                        {/* Parameter Controls */}
+                        <div className="scan-params">
+                            <div className="param-group">
+                                <label>X步距:</label>
+                                <input 
+                                    type="number" 
+                                    min="1" 
+                                    max="10" 
+                                    value={scanParams.step_x || 4}
+                                    onChange={(e) => setScanParams(prev => ({
+                                        ...prev,
+                                        step_x: parseInt(e.target.value) || 4
+                                    }))}
+                                />
+                            </div>
+                            <div className="param-group">
+                                <label>Y步距:</label>
+                                <input 
+                                    type="number" 
+                                    min="1" 
+                                    max="10" 
+                                    value={scanParams.step_y || 4}
+                                    onChange={(e) => setScanParams(prev => ({
+                                        ...prev,
+                                        step_y: parseInt(e.target.value) || 4
+                                    }))}
+                                />
+                            </div>
+                            <div className="param-group">
+                                <label>速度(點/秒):</label>
+                                <input 
+                                    type="number" 
+                                    min="0.5" 
+                                    max="10" 
+                                    step="0.5"
+                                    value={scanParams.speed}
+                                    onChange={(e) => setScanParams(prev => ({
+                                        ...prev,
+                                        speed: parseFloat(e.target.value)
+                                    }))}
+                                />
+                            </div>
+                        </div>
+                        
+                        {/* Control Buttons */}
+                        <div className="scan-controls">
+                            <button 
+                                onClick={sparseScan.play}
+                                disabled={sparseScan.isPlaying || sparseScan.isLoading}
+                                className="control-btn play-btn"
+                            >
+                                開始
+                            </button>
+                            <button 
+                                onClick={sparseScan.pause}
+                                disabled={!sparseScan.isPlaying}
+                                className="control-btn pause-btn"
+                            >
+                                暫停
+                            </button>
+                            <button 
+                                onClick={sparseScan.reset}
+                                disabled={sparseScan.isPlaying}
+                                className="control-btn reset-btn"
+                            >
+                                重置
+                            </button>
+                            <button 
+                                onClick={sparseScan.exportCSV}
+                                disabled={sparseScan.isLoading}
+                                className="control-btn export-btn"
+                            >
+                                匯出CSV
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    if (!sparseScan.data) return;
+                                    
+                                    // 創建debug canvas
+                                    const canvas = document.createElement('canvas');
+                                    canvas.width = sparseScan.data.width;
+                                    canvas.height = sparseScan.data.height;
+                                    canvas.style.border = '1px solid #fff';
+                                    canvas.style.marginTop = '10px';
+                                    
+                                    const ctx = canvas.getContext('2d')!;
+                                    ctx.fillStyle = '#000';
+                                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                                    
+                                    // 繪製格線
+                                    ctx.strokeStyle = '#333';
+                                    ctx.lineWidth = 0.5;
+                                    for (let i = 0; i < canvas.width; i += 20) {
+                                        ctx.beginPath();
+                                        ctx.moveTo(i, 0);
+                                        ctx.lineTo(i, canvas.height);
+                                        ctx.stroke();
+                                    }
+                                    for (let i = 0; i < canvas.height; i += 20) {
+                                        ctx.beginPath();
+                                        ctx.moveTo(0, i);
+                                        ctx.lineTo(canvas.width, i);
+                                        ctx.stroke();
+                                    }
+                                    
+                                    // 繪製設備位置
+                                    devices.forEach(device => {
+                                        if (!device.position_x || !device.position_y) return;
+                                        
+                                        const debugInfo = debugCoordTransform(
+                                            [device.position_x, device.position_y],
+                                            sparseScan.data!
+                                        );
+                                        
+                                        const { i, j } = debugInfo.gridIndex;
+                                        
+                                        switch(device.role) {
+                                            case 'desired':
+                                                ctx.fillStyle = 'cyan';
+                                                break;
+                                            case 'jammer':
+                                                ctx.fillStyle = 'red';
+                                                break;
+                                            default:
+                                                ctx.fillStyle = 'white';
+                                        }
+                                        
+                                        ctx.fillRect(j - 2, i - 2, 4, 4);
+                                        
+                                        // 標記設備名稱
+                                        ctx.fillStyle = 'white';
+                                        ctx.font = '10px monospace';
+                                        ctx.fillText(device.name || 'unknown', j + 5, i - 5);
+                                        
+                                        console.log(`${device.name}: world(${device.position_x}, ${device.position_y}) → grid(${i}, ${j})`, debugInfo);
+                                    });
+                                    
+                                    // 添加到DOM
+                                    const debugDiv = document.getElementById('debug-canvas') || document.createElement('div');
+                                    debugDiv.id = 'debug-canvas';
+                                    debugDiv.innerHTML = '<h4>Debug Grid View</h4>';
+                                    debugDiv.appendChild(canvas);
+                                    
+                                    if (!document.getElementById('debug-canvas')) {
+                                        document.body.appendChild(debugDiv);
+                                    }
+                                    
+                                    // 輸出座標軸資訊
+                                    const axisInfo = getAxisInfo(sparseScan.data);
+                                    console.log('座標軸資訊:', axisInfo);
+                                }}
+                                className="control-btn debug-btn"
+                                style={{ backgroundColor: '#666' }}
+                            >
+                                Debug網格
+                            </button>
+                        </div>
+                        
+                        {/* Progress */}
+                        <div className="scan-progress">
+                            <div className="progress-bar">
+                                <div 
+                                    className="progress-fill"
+                                    style={{ width: `${sparseScan.progress}%` }}
+                                ></div>
+                            </div>
+                            <span className="progress-text">{sparseScan.progress}%</span>
+                        </div>
+                        
+                        {/* Status */}
+                        <div className="scan-status">
+                            {sparseScan.isLoading && <span>載入中...</span>}
+                            {sparseScan.error && <span className="error">錯誤: {sparseScan.error}</span>}
+                            {sparseScan.data && (
+                                <span>
+                                    總點數: {sparseScan.data.total_points} | 
+                                    當前: {sparseScan.currentIdx + 1}
+                                </span>
+                            )}
+                        </div>
+                        
+                        {/* ISS Canvas */}
+                        {sparseScan.data && (
+                            <div className="iss-canvas-container">
+                                <h5>ISS視覺化 (當前位置: {sparseScan.currentIdx + 1}/{sparseScan.data.total_points})</h5>
+                                <div style={{ position: 'relative', display: 'inline-block' }}>
+                                    <SparseISSCanvas
+                                        width={300}
+                                        height={300}
+                                        gridW={sparseScan.data.width}
+                                        gridH={sparseScan.data.height}
+                                        samples={sparseScan.samples}
+                                        vmin={-2}
+                                        vmax={5}
+                                        colormap="viridis"
+                                    />
+                                    {/* UAV位置標記 - 使用統一座標映射 */}
+                                    {sparseScan.data.points[sparseScan.currentIdx] && (
+                                        (() => {
+                                            const currentPoint = sparseScan.data.points[sparseScan.currentIdx];
+                                            const [leftPct, topPct] = worldToCanvasPct(
+                                                currentPoint.x_m, 
+                                                currentPoint.y_m, 
+                                                sparseScan.data
+                                            );
+                                            
+                                            // Debug輸出
+                                            if (sparseScan.currentIdx % 20 === 0) {
+                                                const debugInfo = debugCoordTransform(
+                                                    [currentPoint.x_m, currentPoint.y_m], 
+                                                    sparseScan.data
+                                                );
+                                                console.log('UAV座標轉換debug:', debugInfo);
+                                            }
+                                            
+                                            return (
+                                                <div 
+                                                    className="uav-marker"
+                                                    style={{
+                                                        position: 'absolute',
+                                                        left: `${leftPct}%`,
+                                                        top: `${topPct}%`,
+                                                        transform: 'translate(-50%, -50%)',
+                                                        pointerEvents: 'none'
+                                                    }}
+                                                >
+                                                    🚁
+                                                </div>
+                                            );
+                                        })()
+                                    )}
+                                    
+                                    {/* 設備位置標記 - TX和Jammer */}
+                                    {devices.map((device, index) => {
+                                        if (!device.position_x || !device.position_y || !sparseScan.data) return null;
+                                        
+                                        const [leftPct, topPct] = worldToCanvasPct(
+                                            device.position_x,
+                                            device.position_y,
+                                            sparseScan.data
+                                        );
+                                        
+                                        let marker = '';
+                                        let className = 'device-marker';
+                                        
+                                        switch(device.role) {
+                                            case 'desired':
+                                                marker = '📡';
+                                                className += ' tx-marker';
+                                                break;
+                                            case 'jammer':
+                                                marker = '⚡';
+                                                className += ' jammer-marker';
+                                                break;
+                                            case 'receiver':
+                                                // 接收器已經有UAV標記了，跳過
+                                                return null;
+                                            default:
+                                                return null;
+                                        }
+                                        
+                                        return (
+                                            <div 
+                                                key={device.id || index}
+                                                className={className}
+                                                style={{
+                                                    position: 'absolute',
+                                                    left: `${leftPct}%`,
+                                                    top: `${topPct}%`,
+                                                    transform: 'translate(-50%, -50%)',
+                                                    pointerEvents: 'none',
+                                                    fontSize: '14px',
+                                                    zIndex: 5
+                                                }}
+                                                title={`${device.name}: (${device.position_x}, ${device.position_y})`}
+                                            >
+                                                {marker}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                {/* 顯示當前掃描位置資訊 */}
+                                {sparseScan.data.points[sparseScan.currentIdx] && (
+                                    <div className="current-position-info">
+                                        <small>
+                                            位置: ({sparseScan.data.points[sparseScan.currentIdx].x_m.toFixed(1)}, {sparseScan.data.points[sparseScan.currentIdx].y_m.toFixed(1)})m<br/>
+                                            ISS: {sparseScan.data.points[sparseScan.currentIdx].iss_dbm.toFixed(2)} dBm
+                                        </small>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+
             {/* 3D Canvas內容照舊，會蓋在星空上 */}
             <Canvas
                 ref={canvasRef}
@@ -263,6 +592,9 @@ export default function SceneView({
                         selectedReceiverIds={selectedReceiverIds}
                         satellites={satellites}
                         sceneName={sceneName}
+                        sparseScanData={sparseScan.data}
+                        sparseScanCurrentIdx={sparseScan.currentIdx}
+                        sparseScanActive={sparseScan.isPlaying}
                     />
                     <ContactShadows
                         position={[0, 0.1, 0]}
@@ -280,7 +612,6 @@ export default function SceneView({
 
 // 添加CSS樣式
 const styleSheet = document.createElement('style')
-styleSheet.type = 'text/css'
 styleSheet.innerHTML = `
 .satellite-legend {
     position: absolute;
@@ -327,6 +658,193 @@ styleSheet.innerHTML = `
     font-size: 10px;
     margin-top: 5px;
     opacity: 0.8;
+}
+
+/* Sparse Scan Controls */
+.sparse-scan-controls {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    z-index: 1000;
+}
+
+.toggle-sparse-scan {
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    border: 1px solid #555;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.toggle-sparse-scan:hover {
+    background: rgba(0, 0, 0, 0.9);
+}
+
+.sparse-scan-panel {
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 15px;
+    border-radius: 6px;
+    margin-top: 5px;
+    min-width: 250px;
+    max-width: 300px;
+}
+
+.sparse-scan-panel h4 {
+    margin-top: 0;
+    margin-bottom: 12px;
+    font-size: 14px;
+    border-bottom: 1px solid #555;
+    padding-bottom: 5px;
+}
+
+.sparse-scan-panel h5 {
+    margin: 12px 0 8px 0;
+    font-size: 12px;
+    color: #ccc;
+}
+
+.scan-params {
+    margin-bottom: 12px;
+}
+
+.param-group {
+    display: flex;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 11px;
+}
+
+.param-group label {
+    width: 80px;
+    margin-right: 8px;
+}
+
+.param-group input {
+    width: 50px;
+    padding: 2px 4px;
+    border: 1px solid #555;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.scan-controls {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.control-btn {
+    padding: 4px 8px;
+    border: 1px solid #555;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 10px;
+    flex: 1;
+    min-width: 50px;
+}
+
+.control-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.control-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.play-btn { border-color: #4CAF50; }
+.pause-btn { border-color: #ff9800; }
+.reset-btn { border-color: #f44336; }
+.export-btn { border-color: #2196F3; }
+
+.scan-progress {
+    margin-bottom: 8px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4CAF50, #8BC34A);
+    transition: width 0.1s ease;
+}
+
+.progress-text {
+    font-size: 10px;
+    margin-left: 5px;
+    color: #ccc;
+}
+
+.scan-status {
+    font-size: 10px;
+    color: #ccc;
+    margin-bottom: 8px;
+}
+
+.scan-status .error {
+    color: #f44336;
+}
+
+.iss-canvas-container {
+    border-top: 1px solid #555;
+    padding-top: 8px;
+}
+
+.current-position-info {
+    margin-top: 5px;
+    padding: 4px 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    font-size: 10px;
+    color: #ccc;
+    text-align: center;
+}
+
+.uav-marker {
+    font-size: 16px;
+    z-index: 10;
+    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.8));
+    animation: uav-pulse 2s infinite ease-in-out;
+}
+
+@keyframes uav-pulse {
+    0%, 100% { opacity: 0.8; }
+    50% { opacity: 1.0; }
+}
+
+.device-marker {
+    font-size: 14px;
+    z-index: 5;
+    filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+    user-select: none;
+}
+
+.tx-marker {
+    filter: drop-shadow(0 0 3px rgba(0, 150, 255, 0.8));
+}
+
+.jammer-marker {
+    filter: drop-shadow(0 0 3px rgba(255, 50, 50, 0.8));
+    animation: jammer-flash 1.5s infinite ease-in-out;
+}
+
+@keyframes jammer-flash {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1.0; }
 }
 `
 document.head.appendChild(styleSheet)

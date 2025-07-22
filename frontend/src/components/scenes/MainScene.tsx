@@ -13,6 +13,7 @@ import {
     getBackendSceneName,
     getSceneTextureName,
 } from '../../utils/sceneUtils'
+import { worldToThreeJS } from '../../utils/coordUtils'
 
 export interface MainSceneProps {
     devices: any[]
@@ -27,6 +28,9 @@ export interface MainSceneProps {
     selectedReceiverIds?: number[]
     satellites?: VisibleSatelliteInfo[]
     sceneName: string
+    sparseScanData?: any
+    sparseScanCurrentIdx?: number
+    sparseScanActive?: boolean
 }
 
 const UAV_SCALE = 10
@@ -41,6 +45,9 @@ const MainScene: React.FC<MainSceneProps> = ({
     selectedReceiverIds = [],
     satellites = [],
     sceneName,
+    sparseScanData,
+    sparseScanCurrentIdx = 0,
+    sparseScanActive = false,
 }) => {
     // 根據場景名稱動態生成 URL
     const backendSceneName = getBackendSceneName(sceneName)
@@ -150,13 +157,28 @@ const MainScene: React.FC<MainSceneProps> = ({
                 selectedReceiverIds.includes(device.id)
 
             if (device.role === 'receiver') {
-                const position: [number, number, number] = [
+                // Calculate UAV position based on sparse scan if active
+                let position: [number, number, number] = [
                     device.position_x,
                     device.position_z,
                     device.position_y,
                 ]
 
-                const shouldControl = isSelected
+                // Override position with sparse scan data if active - 使用統一座標轉換
+                if (sparseScanActive && sparseScanData && sparseScanData.points && sparseScanCurrentIdx < sparseScanData.points.length) {
+                    const currentPoint = sparseScanData.points[sparseScanCurrentIdx]
+                    if (currentPoint) {
+                        const [threeX, threeY, threeZ] = worldToThreeJS(
+                            currentPoint.x_m,
+                            currentPoint.y_m,
+                            device.position_z || 40
+                        );
+                        position = [threeX, threeY, threeZ]
+                        console.log(`3D UAV統一座標轉換: world(${currentPoint.x_m}, ${currentPoint.y_m}) → three.js(${threeX}, ${threeY}, ${threeZ})`)
+                    }
+                }
+
+                const shouldControl = isSelected || sparseScanActive
 
                 return (
                     <UAVFlight
@@ -166,7 +188,7 @@ const MainScene: React.FC<MainSceneProps> = ({
                         }
                         position={position}
                         scale={[UAV_SCALE, UAV_SCALE, UAV_SCALE]}
-                        auto={shouldControl ? auto : false}
+                        auto={shouldControl ? (sparseScanActive ? false : auto) : false}
                         manualDirection={shouldControl ? manualDirection : null}
                         onManualMoveDone={() => {
                             if (manualControl) {
@@ -226,6 +248,9 @@ const MainScene: React.FC<MainSceneProps> = ({
         selectedReceiverIds,
         BS_MODEL_URL,
         JAMMER_MODEL_URL,
+        sparseScanData,
+        sparseScanCurrentIdx,
+        sparseScanActive,
     ])
 
     return (

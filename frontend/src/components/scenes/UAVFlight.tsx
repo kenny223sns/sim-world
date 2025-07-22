@@ -71,6 +71,8 @@ export default function UAVFlight({
     )
     useEffect(() => {
         initialPosition.current.set(...position)
+        setCurrentPosition(new THREE.Vector3(...position)) // 確保當前位置也更新
+        console.log('UAV position updated:', position)
     }, [position])
 
     const [targetPosition, setTargetPosition] = useState<THREE.Vector3>(
