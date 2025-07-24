@@ -4,12 +4,9 @@ import { UAVManualDirection } from '../scenes/UAVFlight' // Assuming UAVFlight e
 import { Device } from '../../types/device'
 import SidebarStarfield from '../ui/SidebarStarfield' // Import the new component
 import DeviceItem from '../devices/DeviceItem' // Import DeviceItem
-import { useReceiverSelection } from '../../hooks/useReceiverSelection' // Import the hook
 import { VisibleSatelliteInfo } from '../../types/satellite' // Import the new satellite type
 import { ApiRoutes } from '../../config/apiRoutes' // 引入API路由配置
 import { generateDeviceName as utilGenerateDeviceName } from '../../utils/deviceName' // 修正路徑
-import DroneTrackingControls from '../controls/DroneTrackingControls'
-import { UseDroneTrackingReturn } from '../../hooks/useDroneTracking'
 
 interface SidebarProps {
     devices: Device[]
@@ -28,13 +25,11 @@ interface SidebarProps {
     currentScene?: string // Add current scene prop
     uavAnimation: boolean
     onUavAnimationChange: (val: boolean) => void // Parent will use selected IDs
-    onSelectedReceiversChange?: (selectedIds: number[]) => void // New prop
     onSatelliteDataUpdate?: (satellites: VisibleSatelliteInfo[]) => void // 衛星資料更新回調
     onSatelliteCountChange?: (count: number) => void // 衛星顯示數量變更回調
     satelliteDisplayCount?: number // 衛星顯示數量
     satelliteEnabled?: boolean // 衛星開關狀態
     onSatelliteEnabledChange?: (enabled: boolean) => void // 衛星開關回調
-    droneTracking?: UseDroneTrackingReturn // Drone tracking state and actions
 }
 
 // Helper function to fetch visible satellites
@@ -82,13 +77,11 @@ const Sidebar: React.FC<SidebarProps> = ({
     currentScene = 'nycu', // Default to nycu if not provided
     uavAnimation,
     onUavAnimationChange,
-    onSelectedReceiversChange, // 接收從父組件傳來的回調函數
     onSatelliteDataUpdate, // 新增衛星資料更新回調
     onSatelliteCountChange, // 新增衛星顯示數量變更回調
     satelliteDisplayCount: propSatelliteDisplayCount = 10, // 使用props或默認值
     satelliteEnabled, // 衛星開關狀態
     onSatelliteEnabledChange, // 衛星開關回調
-    droneTracking, // Drone tracking state and actions
 }) => {
     // 為每個設備的方向值創建本地狀態
     const [orientationInputs, setOrientationInputs] = useState<{
@@ -98,15 +91,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     // 新增：持續發送控制指令的 interval id
     const manualIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-    // Use the new hook for receiver selection
-    const { selectedReceiverIds, handleBadgeClick } = useReceiverSelection({
-        devices,
-        onSelectedReceiversChange,
-    })
-
     // 新增：控制各個設備列表的展開狀態
     const [showTempDevices, setShowTempDevices] = useState(true)
-    const [showReceiverDevices, setShowReceiverDevices] = useState(false)
     const [showDesiredDevices, setShowDesiredDevices] = useState(false)
     const [showJammerDevices, setShowJammerDevices] = useState(false)
 
@@ -328,10 +314,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     const tempDevices = devices.filter(
         (device) => device.id == null || device.id < 0
     )
-    const receiverDevices = devices.filter(
-        (device) =>
-            device.id != null && device.id >= 0 && device.role === 'receiver'
-    )
     const desiredDevices = devices.filter(
         (device) =>
             device.id != null && device.id >= 0 && device.role === 'desired'
@@ -505,42 +487,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                             </div>
                         </div>
                     )}
-
-                    {/* UAV 名稱徽章區塊 */}
-                    <div className="uav-name-badges-container">
-                        {devices
-                            .filter(
-                                (device) =>
-                                    device.name &&
-                                    device.role === 'receiver' &&
-                                    device.id !== null // Ensure device has a valid ID
-                            )
-                            .map((device) => {
-                                const isSelected = selectedReceiverIds.includes(
-                                    device.id as number
-                                )
-                                return (
-                                    <span
-                                        key={device.id} // device.id is not null here
-                                        className={`uav-name-badge ${
-                                            isSelected ? 'selected' : ''
-                                        }`}
-                                        onClick={() =>
-                                            handleBadgeClick(
-                                                device.id as number
-                                            )
-                                        }
-                                    >
-                                        {device.name}
-                                    </span>
-                                )
-                            })}
-                    </div>
-                    
-                    {/* Drone Tracking Controls */}
-                    <div className="drone-tracking-section">
-                        <DroneTrackingControls sceneName={currentScene} droneTracking={droneTracking} />
-                    </div>
                 </>
             )}
 
@@ -738,55 +684,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                     </>
                 )}
 
-                {/* 接收器 (Rx) */}
-                {receiverDevices.length > 0 && (
-                    <>
-                        <h3
-                            className={`section-title collapsible-header ${
-                                showReceiverDevices ? 'expanded' : ''
-                            } ${
-                                tempDevices.length > 0 ||
-                                (satelliteEnabled &&
-                                    skyfieldSatellites.length > 0)
-                                    ? 'extra-margin-top'
-                                    : ''
-                            } ${
-                                tempDevices.length > 0 ||
-                                (satelliteEnabled &&
-                                    skyfieldSatellites.length > 0) ||
-                                desiredDevices.length > 0 ||
-                                jammerDevices.length > 0
-                                    ? 'with-border-top'
-                                    : ''
-                            }`}
-                            onClick={() =>
-                                setShowReceiverDevices(!showReceiverDevices)
-                            }
-                        >
-                            接收器 Rx ({receiverDevices.length})
-                        </h3>
-                        {showReceiverDevices &&
-                            receiverDevices.map((device) => (
-                                <DeviceItem
-                                    key={device.id}
-                                    device={device}
-                                    orientationInput={
-                                        orientationInputs[device.id] || {
-                                            x: '0',
-                                            y: '0',
-                                            z: '0',
-                                        }
-                                    }
-                                    onDeviceChange={onDeviceChange}
-                                    onDeleteDevice={onDeleteDevice}
-                                    onOrientationInputChange={
-                                        handleDeviceOrientationInputChange
-                                    }
-                                    onDeviceRoleChange={handleDeviceRoleChange}
-                                />
-                            ))}
-                    </>
-                )}
                 {/* 發射器 (Tx) */}
                 {desiredDevices.length > 0 && (
                     <>
@@ -881,33 +778,6 @@ styleSheet.innerHTML = `
     border-radius: 4px;
 }
 
-.drone-tracking-section {
-    margin-bottom: 10px;
-}
-
-.drone-tracking-section .bg-white {
-    background-color: rgba(0, 0, 0, 0.2) !important;
-    color: white !important;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.drone-tracking-section .text-gray-800 {
-    color: white !important;
-}
-
-.drone-tracking-section .text-gray-600 {
-    color: rgba(255, 255, 255, 0.8) !important;
-}
-
-.drone-tracking-section .text-gray-500 {
-    color: rgba(255, 255, 255, 0.6) !important;
-}
-
-.drone-tracking-section .bg-gray-50 {
-    background-color: rgba(255, 255, 255, 0.1) !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    color: white !important;
-}
 `
 document.head.appendChild(styleSheet)
 

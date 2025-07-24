@@ -1583,6 +1583,8 @@ async def generate_iss_map(
     samples_per_tx: int = 10**7,
     position_override: dict = None,
     force_refresh: bool = False,
+    cell_size_override: Optional[float] = None,
+    map_size_override: Optional[tuple[int, int]] = None,
 ) -> bool:
     """
     生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測
@@ -1626,12 +1628,17 @@ async def generate_iss_map(
         import json
         import time
         
+        # 確定實際使用的參數值（包括覆蓋參數）
+        actual_cell_size = cell_size_override if cell_size_override is not None else cell_size
+        actual_map_size = list(map_size_override) if map_size_override is not None else [512, 512]
+        
         # 提取所有設備的位置和功率信息來生成快取 key
         cache_data = {
             "scene_name": scene_name,
             "scene_size": scene_size,
             "altitude": altitude,
-            "cell_size": cell_size,
+            "cell_size": actual_cell_size,
+            "map_size": actual_map_size,
             "samples_per_tx": samples_per_tx,
             "cfar_threshold_percentile": cfar_threshold_percentile,
             "gaussian_sigma": gaussian_sigma,
@@ -1846,13 +1853,16 @@ async def generate_iss_map(
 
             # 計算無線電地圖
             logger.info("計算無線電地圖...")
+            logger.info(f"使用解析度: {actual_cell_size} 米/像素")
+            logger.info(f"使用地圖大小: {actual_map_size[0]} x {actual_map_size[1]} 像素")
+            
             rm_solver = RadioMapSolver()
             rm = rm_solver(scene,
                            max_depth=20,           # Maximum number of ray scene interactions
                            samples_per_tx=samples_per_tx, 
-                           cell_size=(cell_size, cell_size),      # Resolution of the radio map
+                           cell_size=(actual_cell_size, actual_cell_size),      # Resolution of the radio map
                            center=[0, 0, 1.5],      # Center of the radio map
-                           size=[512, 512],       # Total size of the radio map
+                           size=actual_map_size,       # Total size of the radio map
                            orientation=[0, 0, 0],
                            refraction=True,
                            specular_reflection=True,
@@ -2096,6 +2106,8 @@ class SionnaSimulationService(SimulationServiceInterface):
         samples_per_tx: int = 10**7,
         position_override: dict = None,
         force_refresh: bool = False,
+        cell_size_override: Optional[float] = None,
+        map_size_override: Optional[tuple[int, int]] = None,
     ) -> bool:
         """生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測"""
         logger.info(
@@ -2115,6 +2127,8 @@ class SionnaSimulationService(SimulationServiceInterface):
             samples_per_tx=samples_per_tx,
             position_override=position_override,
             force_refresh=force_refresh,
+            cell_size_override=cell_size_override,
+            map_size_override=map_size_override,
         )
 
     async def run_simulation(

@@ -175,6 +175,9 @@ async def get_iss_map(
     tx_z: Optional[float] = Query(None, description="TX位置Z座標 (米)"),
     jammer: List[str] = Query([], description="Jammer位置列表 (格式: x,y,z)"),
     force_refresh: bool = Query(False, description="強制重新生成地圖，忽略快取"),
+    cell_size: Optional[float] = Query(None, gt=0.1, lt=20.0, description="地圖解析度 (米/像素)"),
+    map_width: Optional[int] = Query(None, gt=64, lt=8192, description="地圖寬度 (像素)"),
+    map_height: Optional[int] = Query(None, gt=64, lt=8192, description="地圖高度 (像素)"),
 ):
     """產生並回傳干擾信號檢測地圖 (使用 2D-CFAR 技術)"""
     logger.info(f"--- API Request: /iss-map?scene={scene}, force_refresh={force_refresh} ---")
@@ -183,6 +186,10 @@ async def get_iss_map(
     if jammer:
         for i, jam_pos_str in enumerate(jammer):
             logger.info(f"Jammer {i+1} 位置參數: {jam_pos_str}")
+    if cell_size is not None:
+        logger.info(f"自定義解析度: {cell_size} 米/像素")
+    if map_width is not None and map_height is not None:
+        logger.info(f"自定義地圖大小: {map_width} x {map_height} 像素")
 
     try:
         # 建構位置覆蓋字典
@@ -207,12 +214,19 @@ async def get_iss_map(
             if jammer_positions:
                 position_override['jammers'] = jammer_positions
             
+        # 添加大小限制保護
+        if map_width is not None and map_height is not None:
+            if map_width * map_height > 16_000_000:  # 限制在1600萬像素以內 (約4000x4000)
+                raise HTTPException(status_code=400, detail="地圖尺寸過大，請限制在1600萬像素以內")
+                
         success = await sionna_service.generate_iss_map(
             session=session, 
             output_path=str(ISS_MAP_IMAGE_PATH),
             scene_name=scene,
             position_override=position_override,
-            force_refresh=force_refresh
+            force_refresh=force_refresh,
+            cell_size_override=cell_size,
+            map_size_override=(map_width, map_height) if map_width is not None and map_height is not None else None
         )
 
         if not success:
