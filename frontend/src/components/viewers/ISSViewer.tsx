@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { ViewerProps } from '../../types/viewer'
 import { ApiRoutes } from '../../config/apiRoutes'
 import { useDevices } from '../../hooks/useDevices'
+import { useMapSettings } from '../../store/useMapSettings'
 
 // 干擾信號檢測地圖顯示組件
 const ISSViewer: React.FC<ViewerProps> = ({
@@ -15,18 +16,9 @@ const ISSViewer: React.FC<ViewerProps> = ({
     const [error, setError] = useState<string | null>(null)
     const [retryCount, setRetryCount] = useState(0)
     const maxRetries = 3
-    
-    // 新增：地圖參數設定
-    const [cellSize, setCellSize] = useState<number>(1.0) // 實際使用的參數
-    const [mapWidth, setMapWidth] = useState<number>(512)
-    const [mapHeight, setMapHeight] = useState<number>(512)
-    
-    // 暫時參數（用戶正在編輯的值，不會立即觸發API）
-    const [tempCellSize, setTempCellSize] = useState<number>(1.0)
-    const [tempMapWidth, setTempMapWidth] = useState<number>(512)
-    const [tempMapHeight, setTempMapHeight] = useState<number>(512)
-    
-    const [showSettings, setShowSettings] = useState<boolean>(false)
+
+    // Use shared map settings instead of local state
+    const { cellSize, width: mapWidth, height: mapHeight, applyToken } = useMapSettings()
 
     const imageUrlRef = useRef<string | null>(null)
     const API_PATH = ApiRoutes.simulations.getISSMap
@@ -40,22 +32,6 @@ const ISSViewer: React.FC<ViewerProps> = ({
         onReportLastUpdateToNavbar?.(timeString)
     }, [onReportLastUpdateToNavbar])
 
-    // 套用地圖設定
-    const applySettings = useCallback(() => {
-        setCellSize(tempCellSize)
-        setMapWidth(tempMapWidth)
-        setMapHeight(tempMapHeight)
-    }, [tempCellSize, tempMapWidth, tempMapHeight])
-
-    // 重設為預設值
-    const resetToDefaults = useCallback(() => {
-        setTempCellSize(1.0)
-        setTempMapWidth(512)
-        setTempMapHeight(512)
-        setCellSize(1.0)
-        setMapWidth(512)
-        setMapHeight(512)
-    }, [])
 
     useEffect(() => {
         imageUrlRef.current = imageUrl
@@ -169,6 +145,13 @@ const ISSViewer: React.FC<ViewerProps> = ({
         }
     }, [loadISSMapImage])
 
+    // Trigger reload when map settings are applied
+    useEffect(() => {
+        if (applyToken) {
+            loadISSMapImage()
+        }
+    }, [applyToken, loadISSMapImage])
+
     const handleRetryClick = () => {
         setRetryCount(0)
         loadISSMapImage()
@@ -176,206 +159,25 @@ const ISSViewer: React.FC<ViewerProps> = ({
 
     return (
         <div className="image-viewer iss-image-container">
-            {/* 地圖設定控制區域 */}
-            <div style={{ marginBottom: '10px' }}>
-                <button
-                    onClick={() => setShowSettings(!showSettings)}
-                    style={{
-                        padding: '8px 12px',
-                        backgroundColor: '#4285f4',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '14px',
-                        marginBottom: '10px'
-                    }}
-                >
-                    {showSettings ? '隱藏' : '顯示'} 地圖設定
-                </button>
-                
-                {showSettings && (
-                    <div style={{
-                        padding: '15px',
-                        backgroundColor: 'rgba(0, 0, 0, 0.1)',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255, 255, 255, 0.2)'
-                    }}>
-                        <div style={{ 
-                            display: 'grid', 
-                            gridTemplateColumns: '1fr 1fr 1fr',
-                            gap: '15px',
-                            fontSize: '14px'
-                        }}>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '5px', color: '#ffffff' }}>
-                                    解析度 (米/像素):
-                                </label>
-                                <input
-                                    type="number"
-                                    step="0.1"
-                                    min="0.1"
-                                    max="20.0"
-                                    value={tempCellSize}
-                                    onChange={(e) => setTempCellSize(parseFloat(e.target.value) || 1.0)}
-                                    style={{
-                                        width: '100%',
-                                        padding: '6px',
-                                        borderRadius: '4px',
-                                        border: '1px solid #ccc',
-                                        backgroundColor: 'rgba(255, 255, 255, 0.9)'
-                                    }}
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '5px', color: '#ffffff' }}>
-                                    寬度 (像素):
-                                </label>
-                                <input
-                                    type="number"
-                                    min="64"
-                                    max="8192"
-                                    value={tempMapWidth}
-                                    onChange={(e) => setTempMapWidth(parseInt(e.target.value) || 512)}
-                                    style={{
-                                        width: '100%',
-                                        padding: '6px',
-                                        borderRadius: '4px',
-                                        border: '1px solid #ccc',
-                                        backgroundColor: 'rgba(255, 255, 255, 0.9)'
-                                    }}
-                                />
-                            </div>
-                            <div>
-                                <label style={{ display: 'block', marginBottom: '5px', color: '#ffffff' }}>
-                                    高度 (像素):
-                                </label>
-                                <input
-                                    type="number"
-                                    min="64"
-                                    max="8192"
-                                    value={tempMapHeight}
-                                    onChange={(e) => setTempMapHeight(parseInt(e.target.value) || 512)}
-                                    style={{
-                                        width: '100%',
-                                        padding: '6px',
-                                        borderRadius: '4px',
-                                        border: '1px solid #ccc',
-                                        backgroundColor: 'rgba(255, 255, 255, 0.9)'
-                                    }}
-                                />
-                            </div>
-                        </div>
-                        
-                        {/* 預覽資訊 */}
-                        <div style={{ 
-                            marginTop: '10px', 
-                            fontSize: '12px', 
-                            color: '#ccc',
-                            textAlign: 'center'
-                        }}>
-                            📊 預覽覆蓋範圍: {(tempCellSize * tempMapWidth).toFixed(1)} x {(tempCellSize * tempMapHeight).toFixed(1)} 米
-                            {tempMapWidth * tempMapHeight > 1000000 && (
-                                <div style={{ color: '#ff6b6b', marginTop: '3px' }}>
-                                    ⚠️ 大尺寸地圖需要較長計算時間
-                                </div>
-                            )}
-                        </div>
-                        
-                        {/* 預設值快捷按鈕 */}
-                        <div style={{ 
-                            marginTop: '15px',
-                            marginBottom: '10px'
-                        }}>
-                            <div style={{ fontSize: '12px', color: '#ccc', marginBottom: '8px', textAlign: 'center' }}>
-                                常用預設:
-                            </div>
-                            <div style={{
-                                display: 'flex',
-                                gap: '5px',
-                                justifyContent: 'center',
-                                flexWrap: 'wrap'
-                            }}>
-                                {[
-                                    { name: '256²', size: 256, cell: 2.0 },
-                                    { name: '512²', size: 512, cell: 1.0 },
-                                    { name: '1024²', size: 1024, cell: 0.5 },
-                                    { name: '2048²', size: 2048, cell: 0.25 }
-                                ].map(preset => (
-                                    <button
-                                        key={preset.name}
-                                        onClick={() => {
-                                            setTempCellSize(preset.cell)
-                                            setTempMapWidth(preset.size)
-                                            setTempMapHeight(preset.size)
-                                        }}
-                                        style={{
-                                            padding: '4px 8px',
-                                            fontSize: '11px',
-                                            backgroundColor: '#17a2b8',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '3px',
-                                            cursor: 'pointer'
-                                        }}
-                                    >
-                                        {preset.name}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* 操作按鈕 */}
-                        <div style={{ 
-                            marginTop: '10px',
-                            display: 'flex',
-                            gap: '10px',
-                            justifyContent: 'center'
-                        }}>
-                            <button
-                                onClick={applySettings}
-                                style={{
-                                    padding: '8px 16px',
-                                    backgroundColor: '#28a745',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer',
-                                    fontSize: '14px',
-                                    fontWeight: 'bold'
-                                }}
-                            >
-                                套用設定
-                            </button>
-                            <button
-                                onClick={resetToDefaults}
-                                style={{
-                                    padding: '8px 16px',
-                                    backgroundColor: '#6c757d',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer',
-                                    fontSize: '14px'
-                                }}
-                            >
-                                重設預設
-                            </button>
-                        </div>
-                        
-                        {/* 當前使用值顯示 */}
-                        <div style={{ 
-                            marginTop: '10px', 
-                            fontSize: '11px', 
-                            color: '#999',
-                            textAlign: 'center',
-                            borderTop: '1px solid rgba(255,255,255,0.1)',
-                            paddingTop: '10px'
-                        }}>
-                            目前使用: {cellSize}米/像素, {mapWidth}×{mapHeight} ({(cellSize * mapWidth).toFixed(1)}×{(cellSize * mapHeight).toFixed(1)}米)
-                        </div>
-                    </div>
-                )}
+            {/* 地圖設定提示 */}
+            <div style={{
+                padding: '10px',
+                marginBottom: '10px',
+                backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                borderLeft: '4px solid #007bff',
+                borderRadius: '4px',
+                fontSize: '14px',
+                color: '#ffffff'
+            }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>
+                    🗺️ 地圖設定
+                </div>
+                <div style={{ fontSize: '12px', color: '#ccc' }}>
+                    目前使用: {cellSize}米/像素, {mapWidth}×{mapHeight} 像素 ({(cellSize * mapWidth).toFixed(1)}×{(cellSize * mapHeight).toFixed(1)}米)
+                </div>
+                <div style={{ fontSize: '12px', color: '#aaa', marginTop: '3px' }}>
+                    💡 在右側面板的「地圖設定」中調整解析度和大小，同時影響 UAV 掃描與干擾檢測地圖
+                </div>
             </div>
             
             {hasTempDevices && (

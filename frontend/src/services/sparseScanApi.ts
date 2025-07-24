@@ -32,6 +32,9 @@ export interface SparseScanParams {
   scene: string;
   step_y?: number;
   step_x?: number;
+  cell_size?: number;
+  map_width?: number;
+  map_height?: number;
 }
 
 /**
@@ -50,6 +53,18 @@ export const fetchSparseScan = async (params: SparseScanParams): Promise<SparseS
     
     if (params.step_x !== undefined) {
       queryParams.append('step_x', params.step_x.toString());
+    }
+    
+    if (params.cell_size !== undefined) {
+      queryParams.append('cell_size', params.cell_size.toString());
+    }
+    
+    if (params.map_width !== undefined) {
+      queryParams.append('map_width', params.map_width.toString());
+    }
+    
+    if (params.map_height !== undefined) {
+      queryParams.append('map_height', params.map_height.toString());
     }
 
     const response = await api.get(`/api/v1/interference/sparse-scan?${queryParams.toString()}`);

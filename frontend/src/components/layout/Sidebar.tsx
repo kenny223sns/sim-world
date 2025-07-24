@@ -7,6 +7,7 @@ import DeviceItem from '../devices/DeviceItem' // Import DeviceItem
 import { VisibleSatelliteInfo } from '../../types/satellite' // Import the new satellite type
 import { ApiRoutes } from '../../config/apiRoutes' // 引入API路由配置
 import { generateDeviceName as utilGenerateDeviceName } from '../../utils/deviceName' // 修正路徑
+import { useMapSettingsComputed, MAP_PRESETS } from '../../store/useMapSettings'
 
 interface SidebarProps {
     devices: Device[]
@@ -95,6 +96,12 @@ const Sidebar: React.FC<SidebarProps> = ({
     const [showTempDevices, setShowTempDevices] = useState(true)
     const [showDesiredDevices, setShowDesiredDevices] = useState(false)
     const [showJammerDevices, setShowJammerDevices] = useState(false)
+    
+    // 地圖設定展開狀態
+    const [showMapSettings, setShowMapSettings] = useState(false)
+    
+    // 使用共享地圖設定
+    const mapSettings = useMapSettingsComputed()
 
     // 新增：Skyfield 衛星資料相關狀態
     const [satelliteDisplayCount, setSatelliteDisplayCount] = useState<number>(
@@ -576,6 +583,119 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
             </div>
 
+            {/* 地圖設定區塊 */}
+            <div className="map-settings-section">
+                <h3
+                    className={`section-title collapsible-header ${
+                        showMapSettings ? 'expanded' : ''
+                    }`}
+                    onClick={() => setShowMapSettings(!showMapSettings)}
+                >
+                    🗺️ 地圖設定
+                </h3>
+                {showMapSettings && (
+                    <div className="map-settings-content">
+                        <div className="map-settings-info">
+                            <div className="current-settings">
+                                <div className="setting-item">
+                                    <span className="label">解析度:</span>
+                                    <span className="value">{mapSettings.cellSize} 米/像素</span>
+                                </div>
+                                <div className="setting-item">
+                                    <span className="label">尺寸:</span>
+                                    <span className="value">{mapSettings.sizeText}</span>  
+                                </div>
+                                <div className="setting-item">
+                                    <span className="label">覆蓋:</span>
+                                    <span className="value">{mapSettings.coverageText}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="map-settings-controls">
+                            <div className="control-group">
+                                <label className="control-label">解析度 (米/像素):</label>
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    min="0.1"
+                                    max="20.0"
+                                    value={mapSettings.cellSize}
+                                    onChange={(e) => mapSettings.setCellSize(parseFloat(e.target.value) || 1.0)}
+                                    className="control-input"
+                                />
+                            </div>
+                            
+                            <div className="control-row">
+                                <div className="control-group">
+                                    <label className="control-label">寬度 (像素):</label>
+                                    <input
+                                        type="number"
+                                        min="64"
+                                        max="8192"
+                                        value={mapSettings.width}
+                                        onChange={(e) => mapSettings.setWidth(parseInt(e.target.value) || 512)}
+                                        className="control-input"
+                                    />
+                                </div>
+                                
+                                <div className="control-group">
+                                    <label className="control-label">高度 (像素):</label>
+                                    <input
+                                        type="number"
+                                        min="64"
+                                        max="8192"
+                                        value={mapSettings.height}
+                                        onChange={(e) => mapSettings.setHeight(parseInt(e.target.value) || 512)}
+                                        className="control-input"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="map-presets">
+                            <div className="presets-label">快速預設:</div>
+                            <div className="presets-buttons">
+                                {MAP_PRESETS.map(preset => (
+                                    <button
+                                        key={preset.name}
+                                        onClick={() => mapSettings.setPreset(preset)}
+                                        className="preset-button"
+                                    >
+                                        {preset.name}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        {mapSettings.isLargeMap && (
+                            <div className="warning-message">
+                                ⚠️ 大尺寸地圖需要較長計算時間
+                            </div>
+                        )}
+                        
+                        <div className="map-actions">
+                            <button
+                                onClick={mapSettings.applySettings}
+                                className="apply-button"
+                            >
+                                套用設定
+                            </button>
+                            <button
+                                onClick={mapSettings.resetToDefaults}
+                                className="reset-button"
+                            >
+                                重設預設
+                            </button>
+                        </div>
+                        
+                        <div className="map-note">
+                            💡 設定同時影響 UAV 稀疏掃描與干擾檢測地圖的對齊
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <div className="devices-list">
                 {/* 新增設備區塊 */}
                 {tempDevices.length > 0 && (
@@ -776,6 +896,171 @@ styleSheet.innerHTML = `
     margin-bottom: 10px;
     background-color: rgba(0, 0, 0, 0.2);
     border-radius: 4px;
+}
+
+.map-settings-section {
+    margin-bottom: 15px;
+}
+
+.map-settings-content {
+    padding: 10px;
+    background-color: rgba(0, 123, 255, 0.05);
+    border: 1px solid rgba(0, 123, 255, 0.2);
+    border-radius: 4px;
+    margin-top: 5px;
+}
+
+.map-settings-info {
+    margin-bottom: 15px;
+}
+
+.current-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.setting-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+}
+
+.setting-item .label {
+    color: #aaa;
+}
+
+.setting-item .value {
+    color: #fff;
+    font-weight: bold;
+}
+
+.map-settings-controls {
+    margin-bottom: 15px;
+}
+
+.control-group {
+    margin-bottom: 8px;
+}
+
+.control-row {
+    display: flex;
+    gap: 10px;
+}
+
+.control-row .control-group {
+    flex: 1;
+}
+
+.control-label {
+    display: block;
+    font-size: 11px;
+    color: #ccc;
+    margin-bottom: 3px;
+}
+
+.control-input {
+    width: 100%;
+    padding: 4px 6px;
+    background-color: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    color: #fff;
+    font-size: 12px;
+}
+
+.control-input:focus {
+    outline: none;
+    border-color: #007bff;
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.map-presets {
+    margin-bottom: 15px;
+}
+
+.presets-label {
+    font-size: 11px;
+    color: #ccc;
+    margin-bottom: 6px;
+}
+
+.presets-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.preset-button {
+    padding: 4px 8px;
+    font-size: 10px;
+    background-color: #17a2b8;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.preset-button:hover {
+    background-color: #138496;
+}
+
+.warning-message {
+    background-color: rgba(255, 107, 107, 0.1);
+    border: 1px solid rgba(255, 107, 107, 0.3);
+    color: #ff6b6b;
+    padding: 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+.map-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.apply-button {
+    flex: 1;
+    padding: 6px 12px;
+    background-color: #28a745;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: bold;
+    transition: background-color 0.2s;
+}
+
+.apply-button:hover {
+    background-color: #218838;
+}
+
+.reset-button {
+    flex: 1;
+    padding: 6px 12px;
+    background-color: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background-color 0.2s;
+}
+
+.reset-button:hover {
+    background-color: #5a6268;
+}
+
+.map-note {
+    font-size: 10px;
+    color: #aaa;
+    text-align: center;
+    font-style: italic;
 }
 
 `

@@ -20,7 +20,7 @@ export default defineConfig(({ command, mode }) => {
             port: parseInt(env.VITE_PORT) || 5173, // 使用 5173 端口
         strictPort: false, // 設為 false 以允許自動尋找可用端口
         hmr: {
-            host: '120.126.151.101', // 👈 請將這裡替換成您的伺服器可被瀏覽器訪問的實際 IP 或主機名
+            host: 'localhost', // Use localhost for development
             port: 5173, // 保持與 server.port 一致
         },
         proxy: {

@@ -33,6 +33,9 @@ async def get_sparse_scan(
     scene: str = Query(description="Scene name (e.g., 'Nanliao')"),
     step_y: int = Query(default=4, description="Y-axis sampling step size"),
     step_x: int = Query(default=4, description="X-axis sampling step size"),
+    cell_size: Optional[float] = Query(None, gt=0.1, lt=20.0, description="Map resolution (meters/pixel)"),
+    map_width: Optional[int] = Query(None, gt=64, lt=8192, description="Map width (pixels)"),
+    map_height: Optional[int] = Query(None, gt=64, lt=8192, description="Map height (pixels)"),
     use_real_iss: bool = Query(default=False, description="Use real ISS map from database devices"),
     session: AsyncSession = Depends(get_async_session)
 ):
@@ -45,7 +48,7 @@ async def get_sparse_scan(
     Returns JSON with sampling points including coordinates and ISS values.
     """
     try:
-        logger.info(f"Sparse scan request: scene={scene}, step_y={step_y}, step_x={step_x}")
+        logger.info(f"Sparse scan request: scene={scene}, step_y={step_y}, step_x={step_x}, cell_size={cell_size}, map_size={map_width}x{map_height}")
         
         # Construct data file paths
         data_dir = f"/data/{scene}"
@@ -57,12 +60,59 @@ async def get_sparse_scan(
         if not all(os.path.exists(path) for path in [iss_path, x_axis_path, y_axis_path]):
             # For development - create sample data if files don't exist
             logger.warning(f"Data files not found for scene {scene}, creating sample data")
-            return create_sample_sparse_scan_data(step_y, step_x)
+            return create_sample_sparse_scan_data(
+                step_y, step_x, 
+                cell_size_override=cell_size,
+                map_size_override=(map_width, map_height) if map_width and map_height else None
+            )
         
         # Load data
         iss_map = np.load(iss_path)
         x_axis = np.load(x_axis_path)
         y_axis = np.load(y_axis_path)
+        
+        # Apply custom map parameters if provided
+        if cell_size is not None or (map_width is not None and map_height is not None):
+            original_height, original_width = iss_map.shape
+            original_cell_size = float(x_axis[1] - x_axis[0]) if len(x_axis) > 1 else 1.0
+            
+            # Use override values or keep original
+            new_cell_size = cell_size if cell_size is not None else original_cell_size
+            new_width = map_width if map_width is not None else original_width
+            new_height = map_height if map_height is not None else original_height
+            
+            logger.info(f"Resampling map from {original_width}x{original_height} (cell:{original_cell_size:.2f}) to {new_width}x{new_height} (cell:{new_cell_size:.2f})")
+            
+            # Calculate physical coverage area
+            original_x_range = x_axis[-1] - x_axis[0]
+            original_y_range = y_axis[-1] - y_axis[0]
+            
+            # Create new coordinate axes with requested resolution
+            x_start = x_axis[0]
+            y_start = y_axis[0]
+            x_end = x_start + new_width * new_cell_size
+            y_end = y_start + new_height * new_cell_size
+            
+            x_axis = np.linspace(x_start, x_end, new_width)
+            y_axis = np.linspace(y_start, y_end, new_height)
+            
+            # Resample ISS map using nearest neighbor interpolation
+            from scipy.interpolate import RegularGridInterpolator
+            
+            # Create interpolator from original data
+            orig_x = np.load(x_axis_path)
+            orig_y = np.load(y_axis_path)
+            interpolator = RegularGridInterpolator(
+                (orig_y, orig_x), iss_map, 
+                method='nearest', bounds_error=False, fill_value=0
+            )
+            
+            # Create new grid points
+            new_y_grid, new_x_grid = np.meshgrid(y_axis, x_axis, indexing='ij')
+            grid_points = np.stack([new_y_grid.ravel(), new_x_grid.ravel()], axis=-1)
+            
+            # Interpolate ISS values
+            iss_map = interpolator(grid_points).reshape(new_height, new_width)
         
         height, width = iss_map.shape
         
@@ -116,11 +166,16 @@ async def get_sparse_scan(
         raise HTTPException(status_code=500, detail=f"Sparse scan failed: {str(e)}")
 
 
-def create_sample_sparse_scan_data(step_y: int = 4, step_x: int = 4) -> Dict[str, Any]:
+def create_sample_sparse_scan_data(
+    step_y: int = 4, 
+    step_x: int = 4,
+    cell_size_override: Optional[float] = None,
+    map_size_override: Optional[tuple[int, int]] = None
+) -> Dict[str, Any]:
     """Create sample data for development/testing - matching backend ISS map parameters"""
-    # Match backend parameters: size=[512, 512], cell_size=4.0, center=[0,0,1.5]
-    height, width = 512, 512
-    cell_size = 4.0
+    # Use override parameters if provided, otherwise use defaults
+    height, width = map_size_override if map_size_override else (512, 512)
+    cell_size = cell_size_override if cell_size_override else 1.0  # Changed default to match ISS map
     
     # Create coordinate axes matching backend RadioMapSolver
     # Total size = 512 * 4 = 2048m, centered at [0,0]

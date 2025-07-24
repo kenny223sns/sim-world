@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchSparseScan, SparseScanResponse, SparseScanPoint, SparseScanParams } from '../services/sparseScanApi';
+import { useMapSettings } from '../store/useMapSettings';
 
 export interface UseSparseUAVScanResult {
   data: SparseScanResponse | null;
@@ -44,6 +45,9 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     autoStart = false
   } = options;
 
+  // Get shared map settings
+  const { cellSize, width, height, applyToken } = useMapSettings();
+
   // State management
   const [data, setData] = useState<SparseScanResponse | null>(null);
   const [samples, setSamples] = useState<Float32Array>(new Float32Array(0));
@@ -67,7 +71,14 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     setError(null);
 
     try {
-      const params: SparseScanParams = { scene, step_y, step_x };
+      const params: SparseScanParams = { 
+        scene, 
+        step_y, 
+        step_x,
+        cell_size: cellSize,
+        map_width: width,
+        map_height: height
+      };
       const response = await fetchSparseScan(params);
       
       setData(response);
@@ -90,7 +101,7 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     } finally {
       setIsLoading(false);
     }
-  }, [scene, step_y, step_x, autoStart]);
+  }, [scene, step_y, step_x, cellSize, width, height, autoStart]);
 
   // Animation loop
   const animate = useCallback((timestamp: number) => {
@@ -226,6 +237,13 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Trigger reload when applyToken changes
+  useEffect(() => {
+    if (applyToken) {
+      loadData();
+    }
+  }, [applyToken, loadData]);
 
   return {
     data,
