@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import Starfield from '../ui/Starfield'
 import MainScene from './MainScene'
 import SparseISSCanvas from './SparseISSCanvas'
+import UAVPathVisualization from './UAVPathVisualization'
 import { Device } from '../../types/device'
 import { VisibleSatelliteInfo } from '../../types/satellite'
 import { UseDroneTrackingReturn } from '../../hooks/useDroneTracking'
@@ -66,6 +67,7 @@ export default function SceneView({
     
     // Sparse scan state
     const [showSparseScan, setShowSparseScan] = useState(false)
+    const [showPathVisualization, setShowPathVisualization] = useState(true)
     const [scanParams, setScanParams] = useState({
         step_x: 4,
         step_y: 4,
@@ -84,6 +86,16 @@ export default function SceneView({
     // Use passed droneTracking or create fallback
     const { isTracking, recordPosition } = droneTracking || { isTracking: false, recordPosition: async () => false }
     const lastRecordedDevicePositions = useRef<Map<number, { x: number; y: number; time: number }>>(new Map())
+    
+    // Calculate current UAV position from sparse scan data
+    const currentUAVPosition: [number, number, number] | undefined = 
+        sparseScan.data && sparseScan.currentIdx < sparseScan.data.points.length
+            ? [
+                sparseScan.data.points[sparseScan.currentIdx].x_m,
+                sparseScan.data.points[sparseScan.currentIdx].y_m,
+                50 // Default UAV altitude
+              ]
+            : undefined;
 
     // Enhanced position update handler that includes drone tracking
     const handleUAVPositionUpdate = useCallback(async (
@@ -321,6 +333,13 @@ export default function SceneView({
                                 className="control-btn export-btn"
                             >
                                 匯出CSV
+                            </button>
+                            <button 
+                                onClick={() => setShowPathVisualization(!showPathVisualization)}
+                                className="control-btn path-btn"
+                                style={{ backgroundColor: showPathVisualization ? '#4CAF50' : '#666' }}
+                            >
+                                {showPathVisualization ? '隱藏' : '顯示'}路徑
                             </button>
                             <button 
                                 onClick={() => {
@@ -596,6 +615,18 @@ export default function SceneView({
                         sparseScanCurrentIdx={sparseScan.currentIdx}
                         sparseScanActive={sparseScan.isPlaying}
                     />
+                    
+                    {/* UAV Path Visualization */}
+                    {showPathVisualization && sparseScan.traversedPath.length > 0 && (
+                        <UAVPathVisualization
+                            pathPoints={sparseScan.traversedPath}
+                            currentPosition={currentUAVPosition}
+                            lineWidth={3}
+                            showCurrentPosition={true}
+                            maxPathLength={500}
+                        />
+                    )}
+                    
                     <ContactShadows
                         position={[0, 0.1, 0]}
                         opacity={0.4}
@@ -764,6 +795,7 @@ styleSheet.innerHTML = `
 .pause-btn { border-color: #ff9800; }
 .reset-btn { border-color: #f44336; }
 .export-btn { border-color: #2196F3; }
+.path-btn { border-color: #9C27B0; }
 
 .scan-progress {
     margin-bottom: 8px;

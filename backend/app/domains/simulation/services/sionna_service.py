@@ -975,7 +975,7 @@ async def generate_sinr_map(
         ax.set_xlabel("x (m)")
         ax.set_ylabel("y (m)")
         ax.set_title("SINR Map")
-        ax.invert_yaxis()
+        # Removed ax.invert_yaxis() to match frontend coordinate system
         plt.tight_layout()
 
         # 保存圖片
@@ -1835,9 +1835,11 @@ async def generate_iss_map(
             # 添加發射器
             transmitters = []
             for tx_info in tx_list:
+                # Convert y coordinate to -y for consistent coordinate system
+                tx_position = [tx_info["position"][0], -tx_info["position"][1], tx_info["position"][2]]
                 tx = SionnaTransmitter(
                     name=tx_info["name"],
-                    position=tx_info["position"],
+                    position=tx_position,
                     orientation=tx_info["orientation"],
                     power_dbm=tx_info["power_dbm"]
                 )
@@ -1848,7 +1850,9 @@ async def generate_iss_map(
 
             # 添加接收器
             rx_name, rx_pos = rx_config
-            rx = SionnaReceiver(name=rx_name, position=rx_pos)
+            # Convert y coordinate to -y for consistent coordinate system
+            rx_position = [rx_pos[0], -rx_pos[1], rx_pos[2]]
+            rx = SionnaReceiver(name=rx_name, position=rx_position)
             scene.add(rx)
 
             # 計算無線電地圖
@@ -1942,7 +1946,9 @@ async def generate_iss_map(
         # 可視化
         logger.info("生成 ISS 地圖可視化")
         plt.figure(figsize=(8, 6))
-        plt.pcolormesh(x_unique, y_unique, iss_dbm, shading='nearest', cmap='viridis')
+        # Use meshgrid like SINR map for consistent coordinate handling
+        X, Y = np.meshgrid(x_unique, y_unique)
+        plt.pcolormesh(X, Y, iss_dbm, shading='nearest', cmap='viridis')
         plt.colorbar(label="ISS (dBm)")
         plt.title("ISS Map with 2D-CFAR Peak Detection")
         

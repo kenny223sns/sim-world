@@ -19,6 +19,7 @@ export interface UseSparseUAVScanResult {
   isLoading: boolean;
   error: string | null;
   progress: number; // 0-100
+  traversedPath: Array<{x: number, y: number, z: number, timestamp: number, color: string}>;
   play: () => void;
   pause: () => void;
   reset: () => void;
@@ -55,6 +56,7 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [traversedPath, setTraversedPath] = useState<Array<{x: number, y: number, z: number, timestamp: number, color: string}>>([]);
 
   // Animation refs
   const animationRef = useRef<number>();
@@ -64,6 +66,35 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
   const progress = data && data.points.length > 0 
     ? Math.round((currentIdx / data.points.length) * 100) 
     : 0;
+
+  // Helper function to generate color based on signal strength and time
+  const generatePathColor = useCallback((iss_dbm: number, timestamp: number, index: number): string => {
+    // Color based on signal strength (ISS dBm value)
+    const minDbm = -120; // Typical minimum ISS value
+    const maxDbm = -60;   // Typical maximum ISS value
+    const normalizedSignal = Math.max(0, Math.min(1, (iss_dbm - minDbm) / (maxDbm - minDbm)));
+    
+    // Create color gradient: Red (weak) -> Yellow (medium) -> Green (strong)
+    let r, g, b;
+    if (normalizedSignal < 0.5) {
+      // Red to Yellow
+      const t = normalizedSignal * 2;
+      r = 255;
+      g = Math.round(255 * t);
+      b = 0;
+    } else {
+      // Yellow to Green
+      const t = (normalizedSignal - 0.5) * 2;
+      r = Math.round(255 * (1 - t));
+      g = 255;
+      b = 0;
+    }
+    
+    // Add slight transparency based on recency (newer points more opaque)
+    const alpha = Math.max(0.6, 1 - (index * 0.001)); // Fade older points slightly
+    
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }, []);
 
   // Load sparse scan data
   const loadData = useCallback(async () => {
@@ -89,8 +120,9 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
       newSamples.fill(NaN);
       setSamples(newSamples);
       
-      // Reset position
+      // Reset position and path
       setCurrentIdx(0);
+      setTraversedPath([]);
       
       if (autoStart && response.points.length > 0) {
         setIsPlaying(true);
@@ -128,6 +160,19 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
             return newSamples;
           });
           
+          // Add point to traversed path with color
+          const pathColor = generatePathColor(point.iss_dbm, timestamp, newIdx);
+          setTraversedPath(prevPath => [
+            ...prevPath,
+            {
+              x: point.x_m,
+              y: point.y_m,
+              z: 0, // UAV altitude could be added here if available
+              timestamp,
+              color: pathColor
+            }
+          ]);
+          
           console.log(`idx=${newIdx} / ${data.points.length}`);
           return newIdx;
         } else {
@@ -160,10 +205,22 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
         }
         return newSamples;
       });
+      
+      // Initialize path with first point
+      const firstPoint = data.points[0];
+      const firstColor = generatePathColor(firstPoint.iss_dbm, performance.now(), 0);
+      setTraversedPath([{
+        x: firstPoint.x_m,
+        y: firstPoint.y_m,
+        z: 0,
+        timestamp: performance.now(),
+        color: firstColor
+      }]);
+      
       setIsPlaying(true);
       console.log('Starting sparse scan animation');
     }
-  }, [data]);
+  }, [data, generatePathColor]);
 
   const pause = useCallback(() => {
     setIsPlaying(false);
@@ -172,6 +229,7 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
   const reset = useCallback(() => {
     setIsPlaying(false);
     setCurrentIdx(0);
+    setTraversedPath([]);
     
     if (data) {
       // Reset samples to all NaN
@@ -253,6 +311,7 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     isLoading,
     error,
     progress,
+    traversedPath,
     play,
     pause,
     reset,
