@@ -8,6 +8,7 @@ export const SCENE_MAPPING = {
     lotus: 'Lotus',
     ntpu: 'NTPU',
     nanliao: 'nnn',
+    potou: 'potou',
 } as const
 
 // 場景顯示名稱映射
@@ -16,29 +17,36 @@ export const SCENE_DISPLAY_NAMES = {
     lotus: '荷花池',
     ntpu: '臺北大學',
     nanliao: '南寮漁港',
+    potou: '破斗山',
 } as const
 
 // 場景座標轉換參數映射
+// scale: 像素/公尺比例 (pixel/meter), 根據後端cell_size=4.0m/pixel，所以scale=1/4.0=0.25 pixel/meter
 export const SCENE_COORDINATE_TRANSFORMS = {
     nycu: {
         offsetX: 865,
         offsetY: 640,
-        scale: 1.0,
+        scale: 0.25,  // 1 pixel = 4 meters, so scale = 1/4 = 0.25 pixel/meter
     },
     lotus: {
         offsetX: 1200,
         offsetY: 900,
-        scale: 1.0,
+        scale: 0.25,
     },
     ntpu: {
         offsetX: 900,
         offsetY: 620,
-        scale: 1.0,
+        scale: 0.25,
     },
     nanliao: {
         offsetX: 920,
         offsetY: 600,
-        scale: 1.0,
+        scale: 0.25,
+    },
+    potou: {
+        offsetX: 900,
+        offsetY: 600,
+        scale: 0.25,
     },
 } as const
 
@@ -80,6 +88,8 @@ export function getSceneTextureName(sceneParam: string): string {
             return 'EXPORT_GOOGLE_SAT_WM.png'  // 臺北大學使用相同的紋理檔案
         case 'nnn':
             return 'EXPORT_GOOGLE_SAT_WM.002.png'  // nnn場景使用特定的紋理檔案
+        case 'potou':
+            return 'EXPORT_GOOGLE_SAT_WM.png'  // potou場景使用相同的紋理檔案
         default:
             return 'EXPORT_GOOGLE_SAT_WM.png'
     }
