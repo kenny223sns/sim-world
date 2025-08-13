@@ -22,6 +22,7 @@ class DeviceUpdate(BaseModel):
     role: Optional[DeviceRole] = None
     power_dbm: Optional[int] = None
     active: Optional[bool] = None
+    visible: Optional[bool] = None
 
     class Config:
         arbitrary_types_allowed = True

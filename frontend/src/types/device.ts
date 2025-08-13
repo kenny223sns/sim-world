@@ -12,6 +12,7 @@ export interface Device {
     orientation_z?: number;
     power_dbm?: number;
     active: boolean;
+    visible?: boolean; // 設備在3D場景中的可見性
     role: string; // 使用角色字段
 }
 
@@ -27,6 +28,7 @@ export interface DeviceCreate {
   role: string;
   power_dbm?: number;
   active: boolean;
+  visible?: boolean;
 }
 
 // 用於更新設備的介面
@@ -41,4 +43,5 @@ export interface DeviceUpdate {
   role?: string;
   power_dbm?: number;
   active?: boolean;
+  visible?: boolean;
 } 

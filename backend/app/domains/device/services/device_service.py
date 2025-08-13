@@ -87,12 +87,63 @@ class DeviceService:
             1 for d in remaining_devices if d.role == DeviceRole.JAMMER.value
         )
 
-        if tx_count < 1 or rx_count < 1 or jammer_count < 1:
+        if tx_count < 1 or rx_count < 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="系統必須至少有一個發射器 (tx)、接收器 (rx)、干擾源 (jammer)。刪除失敗。",
+                detail="系統必須至少有一個發射器 (tx)、接收器 (rx)。刪除失敗。",
             )
 
         # 通過檢查才實際刪除
         deleted_device = await self.device_repository.remove(device_id=device_id)
         return deleted_device
+
+    async def delete_devices_by_role(self, role: str) -> List[Device]:
+        """根據角色批量刪除設備，但會保留每種類型至少一個設備"""
+        if role not in [DeviceRole.DESIRED.value, DeviceRole.RECEIVER.value, DeviceRole.JAMMER.value]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid role: {role}. Must be one of: desired, receiver, jammer",
+            )
+
+        # 查詢所有活躍設備
+        all_active_devices = await self.device_repository.get_active()
+
+        # 分別計算各類型設備數量
+        desired_devices = [d for d in all_active_devices if d.role == DeviceRole.DESIRED.value]
+        receiver_devices = [d for d in all_active_devices if d.role == DeviceRole.RECEIVER.value]
+        jammer_devices = [d for d in all_active_devices if d.role == DeviceRole.JAMMER.value]
+
+        # 根據請求的角色確定要刪除的設備列表
+        if role == DeviceRole.DESIRED.value:
+            target_devices = desired_devices
+            remaining_count = len(target_devices)
+        elif role == DeviceRole.RECEIVER.value:
+            target_devices = receiver_devices
+            remaining_count = len(target_devices)
+        else:  # jammer
+            target_devices = jammer_devices
+            remaining_count = len(target_devices)
+
+        # 檢查是否至少有2個該類型設備（保留1個）
+        # 特例：jammer 可以全部刪除
+        if remaining_count <= 1 and role != DeviceRole.JAMMER.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"無法刪除{role}設備：系統必須至少保留一個該類型設備。",
+            )
+
+        # 刪除除了第一個之外的所有該類型設備
+        # 特例：jammer 可以全部刪除
+        if role == DeviceRole.JAMMER.value:
+            devices_to_delete = target_devices  # jammer 可以全部刪除
+        else:
+            devices_to_delete = target_devices[1:]  # 其他類型保留第一個
+        deleted_devices = []
+
+        for device in devices_to_delete:
+            deleted_device = await self.device_repository.remove(device_id=device.id)
+            deleted_devices.append(deleted_device)
+            logger.info(f"Deleted device: {device.name} (ID: {device.id})")
+
+        logger.info(f"Batch deleted {len(deleted_devices)} devices of role {role}")
+        return deleted_devices

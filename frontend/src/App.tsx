@@ -7,6 +7,7 @@ import Sidebar from './components/layout/Sidebar'
 import Navbar from './components/layout/Navbar'
 import SceneViewer from './components/scenes/FloorView'
 import ErrorBoundary from './components/ui/ErrorBoundary'
+import { UAVScanProvider } from './contexts/UAVScanContext'
 import './styles/App.scss'
 import { Device } from './types/device'
 import { countActiveDevices } from './utils/deviceUtils'
@@ -38,6 +39,7 @@ function App({ activeView }: AppProps) {
         setHasTempDevices,
         applyDeviceChanges,
         deleteDeviceById,
+        deleteDevicesByRole,
         addNewDevice,
         updateDeviceField,
         cancelDeviceChanges,
@@ -139,8 +141,23 @@ function App({ activeView }: AppProps) {
         await deleteDeviceById(id)
     }
 
-    const handleAddDevice = () => {
-        addNewDevice()
+    const handleDeleteDevicesByRole = async (role: string) => {
+        const roleDisplayNames = {
+            'desired': '發射器',
+            'receiver': '接收機', 
+            'jammer': '干擾源'
+        }
+        const displayName = roleDisplayNames[role as keyof typeof roleDisplayNames] || role
+        
+        if (!window.confirm(`確定要移除所有${displayName}設備嗎？（會保留一個）此操作將立即生效。`)) {
+            return
+        }
+
+        await deleteDevicesByRole(role)
+    }
+
+    const handleAddDevice = (role?: string) => {
+        addNewDevice(role)
     }
 
     const handleDeviceChange = (
@@ -266,62 +283,65 @@ function App({ activeView }: AppProps) {
 
     return (
         <ErrorBoundary>
-            <div className="app-container">
-                <Navbar
-                    onMenuClick={handleMenuClick}
-                    activeComponent={activeComponent}
-                    currentScene={currentScene}
-                />
-                <div className="content-wrapper">
-                    <Layout
-                        sidebar={
-                            <ErrorBoundary fallback={<div>側邊欄發生錯誤</div>}>
-                                <Sidebar
-                                    devices={sortedDevicesForSidebar}
-                                    onDeviceChange={handleDeviceChange}
-                                    onDeleteDevice={handleDeleteDevice}
-                                    onAddDevice={handleAddDevice}
-                                    onApply={handleApply}
-                                    onCancel={handleCancel}
-                                    loading={loading}
-                                    apiStatus={apiStatus}
-                                    hasTempDevices={hasTempDevices}
-                                    auto={auto}
-                                    onAutoChange={setAuto}
-                                    onManualControl={handleManualControl}
-                                    activeComponent={activeComponent}
-                                    currentScene={currentScene}
-                                    uavAnimation={uavAnimation}
-                                    onUavAnimationChange={setUavAnimation}
-                                    onSelectedReceiversChange={
-                                        handleSelectedReceiversChange
-                                    }
-                                    onSatelliteDataUpdate={
-                                        handleSatelliteDataUpdate
-                                    }
-                                    onSatelliteCountChange={
-                                        handleSatelliteCountChange
-                                    }
-                                    satelliteDisplayCount={
-                                        satelliteDisplayCount
-                                    }
-                                    satelliteEnabled={satelliteEnabled}
-                                    onSatelliteEnabledChange={
-                                        setSatelliteEnabled
-                                    }
-                                    droneTracking={droneTracking}
-                                />
-                            </ErrorBoundary>
-                        }
-                        content={
-                            <ErrorBoundary fallback={<div>主視圖發生錯誤</div>}>
-                                {renderActiveComponent()}
-                            </ErrorBoundary>
-                        }
+            <UAVScanProvider>
+                <div className="app-container">
+                    <Navbar
+                        onMenuClick={handleMenuClick}
                         activeComponent={activeComponent}
+                        currentScene={currentScene}
                     />
+                    <div className="content-wrapper">
+                        <Layout
+                            sidebar={
+                                <ErrorBoundary fallback={<div>側邊欄發生錯誤</div>}>
+                                    <Sidebar
+                                        devices={sortedDevicesForSidebar}
+                                        onDeviceChange={handleDeviceChange}
+                                        onDeleteDevice={handleDeleteDevice}
+                                        onDeleteDevicesByRole={handleDeleteDevicesByRole}
+                                        onAddDevice={handleAddDevice}
+                                        onApply={handleApply}
+                                        onCancel={handleCancel}
+                                        loading={loading}
+                                        apiStatus={apiStatus}
+                                        hasTempDevices={hasTempDevices}
+                                        auto={auto}
+                                        onAutoChange={setAuto}
+                                        onManualControl={handleManualControl}
+                                        activeComponent={activeComponent}
+                                        currentScene={currentScene}
+                                        uavAnimation={uavAnimation}
+                                        onUavAnimationChange={setUavAnimation}
+                                        onSelectedReceiversChange={
+                                            handleSelectedReceiversChange
+                                        }
+                                        onSatelliteDataUpdate={
+                                            handleSatelliteDataUpdate
+                                        }
+                                        onSatelliteCountChange={
+                                            handleSatelliteCountChange
+                                        }
+                                        satelliteDisplayCount={
+                                            satelliteDisplayCount
+                                        }
+                                        satelliteEnabled={satelliteEnabled}
+                                        onSatelliteEnabledChange={
+                                            setSatelliteEnabled
+                                        }
+                                        droneTracking={droneTracking}
+                                    />
+                                </ErrorBoundary>
+                            }
+                            content={
+                                <ErrorBoundary fallback={<div>主視圖發生錯誤</div>}>
+                                    {renderActiveComponent()}
+                                </ErrorBoundary>
+                            }
+                            activeComponent={activeComponent}
+                        />
+                    </div>
                 </div>
-            </div>
+            </UAVScanProvider>
         </ErrorBoundary>
     )
 }

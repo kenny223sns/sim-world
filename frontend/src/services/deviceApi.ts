@@ -69,10 +69,22 @@ export const deleteDevice = async (deviceId: number): Promise<void> => {
   }
 };
 
+// 根據角色批量刪除設備
+export const deleteDevicesByRole = async (role: string): Promise<Device[]> => {
+  try {
+    const response = await api.delete<Device[]>(`${ApiRoutes.devices.getAll}/batch/by-role?role=${role}`);
+    return response.data;
+  } catch (error) {
+    console.error(`批量刪除 ${role} 設備失敗:`, error);
+    throw error;
+  }
+};
+
 export default {
   getDevices,
   getDeviceById,
   createDevice,
   updateDevice,
-  deleteDevice
+  deleteDevice,
+  deleteDevicesByRole
 }; 

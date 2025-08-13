@@ -22,6 +22,9 @@ from app.domains.wireless.api.wireless_api import router as wireless_router
 from app.domains.interference.api.interference_api import router as interference_router
 from app.api.v1.interference.routes_sparse_scan import router as sparse_scan_router
 
+# Import sparse ISS map generation router
+from app.api.v1.simulations.routes_sparse_iss_map import router as sparse_iss_map_router
+
 # Import drone tracking domain API router
 from app.domains.drone_tracking.api.drone_tracking_api import router as drone_tracking_router
 
@@ -94,6 +97,9 @@ api_router.include_router(wireless_router, prefix="/wireless", tags=["Wireless"]
 # Register interference domain API router
 api_router.include_router(interference_router, tags=["Interference"])
 api_router.include_router(sparse_scan_router, tags=["Sparse Scan"])
+
+# Register sparse ISS map generation router
+api_router.include_router(sparse_iss_map_router, tags=["Sparse ISS Map"])
 
 # Register drone tracking domain API router
 api_router.include_router(drone_tracking_router, tags=["Drone Tracking"])

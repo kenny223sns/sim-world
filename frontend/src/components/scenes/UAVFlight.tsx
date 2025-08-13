@@ -73,6 +73,11 @@ export default function UAVFlight({
         initialPosition.current.set(...position)
         setCurrentPosition(new THREE.Vector3(...position)) // 確保當前位置也更新
         console.log('UAV position updated:', position)
+        
+        // 立即更新3D場景中的位置 - 特別是對於稀疏掃描模式
+        if (group.current) {
+            group.current.position.set(...position)
+        }
     }, [position])
 
     const [targetPosition, setTargetPosition] = useState<THREE.Vector3>(
@@ -554,10 +559,7 @@ export default function UAVFlight({
     useFrame((state, delta) => {
         if (mixer) mixer.update(delta)
         if (group.current) {
-            // 不要在這裡直接修改 group.current.position，currentPosition 已經包含了Z軸位移
-            // group.current.position.copy(currentPosition)
-            // 如果 currentPosition 已經包含了動畫的Z軸位移，那麼上面的 HOVER_ANIMATION_Z_OFFSET 應該加到 currentPosition
-            // 但目前假設動畫位移是 clonsedScene 內部的，由 HOVER_ANIMATION_Z_OFFSET 補償
+            // 確保位置始終與currentPosition同步，不管是否為auto模式
             group.current.position.set(
                 currentPosition.x,
                 currentPosition.y,
@@ -568,6 +570,8 @@ export default function UAVFlight({
             lightRef.current.position.set(0, 5, 0)
             lightRef.current.intensity = 2000
         }
+        
+        // 如果不是自動模式，則不執行自動路徑追蹤邏輯
         if (!auto) return
         if (!group.current || !lightRef.current || waypoints.length === 0)
             return

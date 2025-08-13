@@ -14,6 +14,44 @@ export interface SparseScanPoint {
   iss_dbm: number;
 }
 
+export interface JammerLocationGPS {
+  device_id: number;
+  device_name: string;
+  device_role: string;
+  frontend_coords: {
+    x: number;
+    y: number;
+    z: number;
+  };
+  gps_coords: {
+    latitude: number;
+    longitude: number;
+    altitude: number | null;
+  };
+}
+
+export interface CFARPeakGPS {
+  peak_id: number;
+  grid_coords: {
+    row: number;
+    col: number;
+  };
+  sionna_coords: {
+    x: number;
+    y: number;
+  };
+  frontend_coords: {
+    x: number;
+    y: number;
+  };
+  gps_coords: {
+    latitude: number;
+    longitude: number;
+    altitude: number | null;
+  };
+  iss_strength_dbm: number;
+}
+
 export interface SparseScanResponse {
   success: boolean;
   height: number;
@@ -26,6 +64,8 @@ export interface SparseScanResponse {
   step_y: number;
   scene: string;
   note?: string;
+  jammer_locations_gps: JammerLocationGPS[];  // 設備干擾源GPS位置
+  cfar_peaks_gps: CFARPeakGPS[];  // 新增：CFAR檢測峰值GPS位置
 }
 
 export interface SparseScanParams {
@@ -35,6 +75,8 @@ export interface SparseScanParams {
   cell_size?: number;
   map_width?: number;
   map_height?: number;
+  center_on_devices?: boolean;
+  scan_radius?: number;
 }
 
 /**
@@ -65,6 +107,14 @@ export const fetchSparseScan = async (params: SparseScanParams): Promise<SparseS
     
     if (params.map_height !== undefined) {
       queryParams.append('map_height', params.map_height.toString());
+    }
+    
+    if (params.center_on_devices !== undefined) {
+      queryParams.append('center_on_devices', params.center_on_devices.toString());
+    }
+    
+    if (params.scan_radius !== undefined) {
+      queryParams.append('scan_radius', params.scan_radius.toString());
     }
 
     const response = await api.get(`/api/v1/interference/sparse-scan?${queryParams.toString()}`);

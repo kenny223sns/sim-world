@@ -144,3 +144,26 @@ async def delete_device_by_id(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred while deleting the device: {str(e)}",
         )
+
+
+@router.delete("/batch/by-role", response_model=List[DeviceSchema])
+async def delete_devices_by_role(
+    *,
+    device_service: DeviceService = Depends(get_device_service),
+    role: str = Query(..., description="Device role to delete (desired/receiver/jammer)"),
+) -> Any:
+    """
+    根據角色批量刪除設備。會保留發射器和接收器至少一個設備，干擾源可全部刪除。
+    """
+    logger.info(f"API: Received request to delete devices by role: {role}")
+    try:
+        deleted_devices = await device_service.delete_devices_by_role(role=role)
+        return [DeviceSchema.from_orm(device) for device in deleted_devices]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API Error deleting devices by role: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred while deleting devices by role: {str(e)}",
+        )

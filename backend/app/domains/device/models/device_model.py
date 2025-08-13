@@ -25,6 +25,7 @@ class DeviceBase(SQLModel):
     role: DeviceRole = Field(..., sa_type=String(50))
     power_dbm: int = Field(default=0)
     active: bool = Field(default=True, index=True)
+    visible: bool = Field(default=True, index=True)  # 設備在3D場景中的可見性
 
 
 # Represents the table structure, inherits validation from DeviceBase

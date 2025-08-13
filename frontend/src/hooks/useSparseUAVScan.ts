@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchSparseScan, SparseScanResponse, SparseScanPoint, SparseScanParams } from '../services/sparseScanApi';
 import { useMapSettings } from '../store/useMapSettings';
+import { ApiRoutes } from '../config/apiRoutes';
 
 export interface UseSparseUAVScanResult {
   data: SparseScanResponse | null;
@@ -20,10 +21,15 @@ export interface UseSparseUAVScanResult {
   error: string | null;
   progress: number; // 0-100
   traversedPath: Array<{x: number, y: number, z: number, timestamp: number, color: string}>;
+  currentISSMap: string | null; // Current ISS map image URL (deprecated)
+  isGeneratingISS: boolean; // Whether currently generating ISS value
+  realTimeISSValue: number | null; // Current real-time ISS value
   play: () => void;
   pause: () => void;
   reset: () => void;
   exportCSV: () => void;
+  exportScanPointsForISSMap: () => Array<{x: number, y: number}>; // 導出掃描點供 ISS 地圖使用
+  getScanPointsCount: () => number; // 獲取已掃描點數量
 }
 
 export interface UseSparseUAVScanOptions {
@@ -32,6 +38,7 @@ export interface UseSparseUAVScanOptions {
   step_x?: number;
   speed?: number; // points per second
   autoStart?: boolean;
+  devices?: any[]; // 添加設備列表用於監聽設備變化
 }
 
 /**
@@ -43,7 +50,8 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     step_y = 4,
     step_x = 4,
     speed = 2, // points per second
-    autoStart = false
+    autoStart = false,
+    devices = []
   } = options;
 
   // Get shared map settings
@@ -57,6 +65,9 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [traversedPath, setTraversedPath] = useState<Array<{x: number, y: number, z: number, timestamp: number, color: string}>>([]);
+  const [currentISSMap, setCurrentISSMap] = useState<string | null>(null);
+  const [isGeneratingISS, setIsGeneratingISS] = useState(false);
+  const [realTimeISSValue, setRealTimeISSValue] = useState<number | null>(null);
 
   // Animation refs
   const animationRef = useRef<number>();
@@ -66,6 +77,8 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
   const progress = data && data.points.length > 0 
     ? Math.round((currentIdx / data.points.length) * 100) 
     : 0;
+
+
 
   // Helper function to generate color based on signal strength and time
   const generatePathColor = useCallback((iss_dbm: number, timestamp: number, index: number): string => {
@@ -108,7 +121,9 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
         step_x,
         cell_size: cellSize,
         map_width: width,
-        map_height: height
+        map_height: height,
+        center_on_devices: true,
+        scan_radius: 200.0
       };
       const response = await fetchSparseScan(params);
       
@@ -133,94 +148,81 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     } finally {
       setIsLoading(false);
     }
-  }, [scene, step_y, step_x, cellSize, width, height, autoStart]);
+  }, [scene, step_y, step_x, cellSize, width, height, autoStart, devices]);
 
-  // Animation loop
-  const animate = useCallback((timestamp: number) => {
+  // Process next point (simplified - only record position)
+  const processNextPoint = useCallback(() => {
     if (!data || !isPlaying) return;
 
-    const deltaTime = timestamp - lastUpdateRef.current;
-    const timePerPoint = 1000 / speed; // milliseconds per point
-
-    if (deltaTime >= timePerPoint) {
-      setCurrentIdx(prevIdx => {
-        const newIdx = prevIdx + 1;
+    setCurrentIdx(prevIdx => {
+      const newIdx = prevIdx + 1;
+      
+      if (newIdx < data.points.length) {
+        const point = data.points[newIdx];
         
-        if (newIdx < data.points.length) {
-          // Update samples with current point
-          const point = data.points[newIdx];
-          setSamples(prevSamples => {
-            const newSamples = prevSamples.slice(); // 創建新陣列確保React檢測到變化
-            const arrayIdx = point.i * data.width + point.j;
-            if (arrayIdx >= 0 && arrayIdx < newSamples.length) {
-              newSamples[arrayIdx] = point.iss_dbm;
-              console.log(`samples updated at idx ${arrayIdx}: ${point.iss_dbm} dBm`);
-              console.log('samples[0..20] after step =', newSamples.slice(0, 20));
-            }
-            return newSamples;
-          });
-          
-          // Add point to traversed path with color
-          const pathColor = generatePathColor(point.iss_dbm, timestamp, newIdx);
-          setTraversedPath(prevPath => [
-            ...prevPath,
-            {
-              x: point.x_m,
-              y: point.y_m,
-              z: 0, // UAV altitude could be added here if available
-              timestamp,
-              color: pathColor
-            }
-          ]);
-          
-          console.log(`idx=${newIdx} / ${data.points.length}`);
-          return newIdx;
-        } else {
-          // Animation finished
-          setIsPlaying(false);
-          return prevIdx;
-        }
-      });
+        // Update samples with current point (use original ISS value)
+        setSamples(prevSamples => {
+          const newSamples = prevSamples.slice(); // 創建新陣列確保React檢測到變化
+          const arrayIdx = point.i * data.width + point.j;
+          if (arrayIdx >= 0 && arrayIdx < newSamples.length) {
+            newSamples[arrayIdx] = point.iss_dbm;
+            console.log(`samples updated at idx ${arrayIdx}: ${point.iss_dbm} dBm`);
+          }
+          return newSamples;
+        });
+        
+        // Add point to traversed path with color
+        const pathColor = generatePathColor(point.iss_dbm, performance.now(), newIdx);
+        setTraversedPath(prevPath => [
+          ...prevPath,
+          {
+            x: point.x_m,
+            y: point.y_m,
+            z: 30, // UAV altitude
+            timestamp: performance.now(),
+            color: pathColor
+          }
+        ]);
+        
+        console.log(`UAV位置: (${point.x_m}, ${point.y_m}) - 進度: ${newIdx}/${data.points.length}`);
+        
+        return newIdx;
+      } else {
+        // Animation finished
+        setIsPlaying(false);
+        console.log('UAV稀疏掃描完成');
+        return prevIdx;
+      }
+    });
+  }, [data, isPlaying, generatePathColor]);
 
-      lastUpdateRef.current = timestamp;
+  // Animation loop using setInterval for predictable timing
+  useEffect(() => {
+    if (isPlaying && data) {
+      const interval = setInterval(() => {
+        processNextPoint();
+      }, 1000 / speed); // Convert speed to milliseconds
+      
+      return () => clearInterval(interval);
     }
-
-    if (isPlaying) {
-      animationRef.current = requestAnimationFrame(animate);
-    }
-  }, [data, isPlaying, speed]);
+  }, [isPlaying, data, speed, processNextPoint]);
 
   // Control functions
   const play = useCallback(() => {
     if (data && data.points.length > 0) {
-      // Reset and initialize first point
+      // Reset and initialize
       setCurrentIdx(0);
+      setRealTimeISSValue(null);
       setSamples(prev => {
         const newSamples = new Float32Array(prev.length).fill(NaN);
-        const firstPoint = data.points[0];
-        const arrayIdx = firstPoint.i * data.width + firstPoint.j;
-        if (arrayIdx >= 0 && arrayIdx < newSamples.length) {
-          newSamples[arrayIdx] = firstPoint.iss_dbm;
-          console.log(`Initialized with first point: ${firstPoint.iss_dbm} dBm at idx ${arrayIdx}`);
-        }
         return newSamples;
       });
-      
-      // Initialize path with first point
-      const firstPoint = data.points[0];
-      const firstColor = generatePathColor(firstPoint.iss_dbm, performance.now(), 0);
-      setTraversedPath([{
-        x: firstPoint.x_m,
-        y: firstPoint.y_m,
-        z: 0,
-        timestamp: performance.now(),
-        color: firstColor
-      }]);
+      setTraversedPath([]);
       
       setIsPlaying(true);
-      console.log('Starting sparse scan animation');
+      console.log('開始UAV稀疏掃描 - 只記錄位置');
     }
-  }, [data, generatePathColor]);
+  }, [data]);
 
   const pause = useCallback(() => {
     setIsPlaying(false);
@@ -275,21 +277,28 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     window.URL.revokeObjectURL(url);
   }, [data, currentIdx, scene]);
 
-  // Start animation when isPlaying becomes true
-  useEffect(() => {
-    if (isPlaying && data) {
-      lastUpdateRef.current = performance.now();
-      animationRef.current = requestAnimationFrame(animate);
-    } else if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current);
-    }
+  // 導出掃描點供 ISS 地圖使用
+  const exportScanPointsForISSMap = useCallback((): Array<{x: number, y: number}> => {
+    // 從 traversedPath 提取 x, y 座標
+    const scanPoints = traversedPath.map(point => ({
+      x: point.x,
+      y: point.y
+    }));
+    
+    console.log('導出掃描點給 ISS 地圖:', {
+      traversedPathLength: traversedPath.length,
+      scanPointsLength: scanPoints.length,
+      samplePoints: scanPoints.slice(0, 3)
+    });
+    
+    return scanPoints;
+  }, [traversedPath]);
 
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [isPlaying, animate, data]);
+  // 獲取已掃描點數量
+  const getScanPointsCount = useCallback((): number => {
+    return traversedPath.length;
+  }, [traversedPath]);
+
 
   // Load data on mount or when parameters change
   useEffect(() => {
@@ -303,6 +312,15 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     }
   }, [applyToken, loadData]);
 
+  // Cleanup ISS map URL on unmount
+  useEffect(() => {
+    return () => {
+      if (currentISSMap) {
+        URL.revokeObjectURL(currentISSMap);
+      }
+    };
+  }, [currentISSMap]);
+
   return {
     data,
     samples,
@@ -312,9 +330,14 @@ export const useSparseUAVScan = (options: UseSparseUAVScanOptions): UseSparseUAV
     error,
     progress,
     traversedPath,
+    currentISSMap,
+    isGeneratingISS,
+    realTimeISSValue,
     play,
     pause,
     reset,
-    exportCSV
+    exportCSV,
+    exportScanPointsForISSMap,
+    getScanPointsCount
   };
 };

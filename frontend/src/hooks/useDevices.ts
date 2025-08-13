@@ -4,6 +4,7 @@ import {
     createDevice as apiCreateDevice,
     updateDevice as apiUpdateDevice,
     deleteDevice as apiDeleteDevice,
+    deleteDevicesByRole as apiDeleteDevicesByRole,
 } from '../services'
 import { Device, DeviceCreate, DeviceUpdate } from '../types/device'
 import { convertBackendToFrontend } from '../utils/deviceUtils'
@@ -55,6 +56,7 @@ export const useDevices = () => {
                     orientation_z: 0,
                     power_dbm: 0,
                     active: true,
+                    visible: true,
                     role: ['desired', 'receiver', 'jammer'][i % 3] as string,
                 })
             )
@@ -111,6 +113,7 @@ export const useDevices = () => {
                     role: device.role,
                     power_dbm: device.power_dbm,
                     active: device.active,
+                    visible: device.visible,
                 }
                 await apiCreateDevice(payload)
             }
@@ -127,6 +130,7 @@ export const useDevices = () => {
                     role: device.role,
                     power_dbm: device.power_dbm,
                     active: device.active,
+                    visible: device.visible,
                 }
                 await apiUpdateDevice(device.id, payload)
             }
@@ -176,7 +180,7 @@ export const useDevices = () => {
         }
     }
 
-    const addNewDevice = () => {
+    const addNewDevice = (specifiedRole?: string) => {
         const tempId = -Math.floor(Math.random() * 1000000) - 1;
         const getPrefix = (role: string = 'receiver'): string => {
             switch (role) {
@@ -186,9 +190,17 @@ export const useDevices = () => {
                 default: return 'device';
             }
         };
+        const getDefaultPower = (role: string): number => {
+            switch (role) {
+                case 'desired': return 30;  // 發射器預設功率
+                case 'jammer': return 20;   // 干擾器預設功率
+                case 'receiver': return 0;  // 接收器無功率
+                default: return 0;
+            }
+        };
         const existingNames = tempDevices.map((device) => device.name);
-        const defaultRole: string = 'receiver';
-        const prefix = getPrefix(defaultRole);
+        const targetRole: string = specifiedRole || 'desired';
+        const prefix = getPrefix(targetRole);
         let index = 1;
         let newName = `${prefix}${index}`;
         while (existingNames.includes(newName)) {
@@ -199,11 +211,14 @@ export const useDevices = () => {
             id: tempId, name: newName,
             position_x: 0, position_y: 0, position_z: 40,
             orientation_x: 0, orientation_y: 0, orientation_z: 0,
-            power_dbm: 0, active: true, role: defaultRole,
+            power_dbm: getDefaultPower(targetRole), active: true, visible: true, role: targetRole,
         };
         setTempDevices((prev) => [...prev, newDevice]);
         setHasTempDevices(true);
-        console.log('useDevices: 已在前端創建臨時設備:', newDevice);
+        console.log(`useDevices: 已在前端創建臨時${targetRole}設備:`, newDevice);
+        
+        // 提醒用戶需要套用變更
+        console.log('提醒：新設備已添加到暫存區，請記得點擊「套用」按鈕保存到系統！');
     };
 
     // 新增：處理單個設備屬性更改的函數
@@ -322,6 +337,31 @@ export const useDevices = () => {
         // console.log(`useDevices: 已更新設備 ID ${deviceId} 的位置信息來自 UAV:`, pos); // 註解掉飛行時的 log
     };
 
+    const deleteDevicesByRole = async (role: string): Promise<boolean> => {
+        if (apiStatus !== 'connected') {
+            setError('無法批量刪除設備：API連接未建立')
+            return false
+        }
+
+        setLoading(true)
+        setError(null)
+        try {
+            console.log(`useDevices: 調用 API 批量刪除 ${role} 設備`)
+            const deletedDevices = await apiDeleteDevicesByRole(role)
+            console.log(`useDevices: 成功刪除 ${deletedDevices.length} 個 ${role} 設備`)
+            await fetchDevices()
+            return true
+        } catch (err: any) {
+            console.error(`useDevices: 批量刪除 ${role} 設備失敗:`, err)
+            setError(
+                `批量刪除 ${role} 設備失敗: ${ err.response?.data?.detail || err.message || '未知錯誤' }`
+            )
+            return false
+        } finally {
+            setLoading(false)
+        }
+    }
+
     return {
         tempDevices,
         originalDevices,
@@ -336,6 +376,7 @@ export const useDevices = () => {
         setError,
         applyDeviceChanges,
         deleteDeviceById,
+        deleteDevicesByRole,
         addNewDevice,
         updateDeviceField,
         cancelDeviceChanges,

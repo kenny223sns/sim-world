@@ -30,8 +30,18 @@ const DeviceItem: React.FC<DeviceItemProps> = ({
         }
     }
 
+    // 檢查是否為新設備（ID < 0）
+    const isNewDevice = device.id < 0;
+    
     return (
-        <div key={device.id} className="device-item">
+        <div 
+            key={device.id} 
+            className={`device-item ${isNewDevice ? 'new-device' : ''}`}
+            style={{
+                border: isNewDevice ? '2px solid #ffa500' : undefined,
+                backgroundColor: isNewDevice ? 'rgba(255, 165, 0, 0.1)' : undefined
+            }}
+        >
             <div className="device-header">
                 <input
                     type="text"
@@ -40,7 +50,31 @@ const DeviceItem: React.FC<DeviceItemProps> = ({
                         onDeviceChange(device.id, 'name', e.target.value)
                     }
                     className="device-name-input"
+                    style={{
+                        fontWeight: isNewDevice ? 'bold' : 'normal',
+                        color: isNewDevice ? '#ffa500' : undefined
+                    }}
                 />
+                {isNewDevice && <span style={{ fontSize: '12px', color: '#ffa500' }}>新增</span>}
+                {device.role === 'jammer' && (
+                    <button
+                        className={device.visible === true ? "visibility-btn visible" : "visibility-btn hidden"}
+                        onClick={() => onDeviceChange(device.id, 'visible', device.visible !== true)}
+                        style={{
+                            backgroundColor: device.visible === true ? '#ffc107' : '#6c757d',
+                            color: device.visible === true ? 'black' : 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            padding: '2px 6px',
+                            fontSize: '10px',
+                            cursor: 'pointer',
+                            marginRight: '4px'
+                        }}
+                        title={device.visible === true ? "隱藏設備" : "顯示設備"}
+                    >
+                        {device.visible === true ? '👁️' : '🚫'}
+                    </button>
+                )}
                 <button
                     className="delete-btn"
                     onClick={() => onDeleteDevice(device.id)}

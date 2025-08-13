@@ -33,7 +33,7 @@ const DeviceOverlaySVG: React.FC<DeviceOverlaySVGProps> = ({
             width={imageRef.current.offsetWidth}
             height={imageRef.current.offsetHeight}
         >
-            {devices.map((device) => {
+            {devices.filter(device => device.role !== 'jammer' || device.visible !== false).map((device) => {
                 const coords = sceneToImageCoords(
                     device.position_x,
                     device.position_y

@@ -15,10 +15,21 @@ from app.domains.coordinates.interfaces.coordinate_service_interface import (
 
 logger = logging.getLogger(__name__)
 
-# --- GLB Coordinate Conversion Constants ---
-ORIGIN_LATITUDE_GLB = 24.786667  # 真實世界原點緯度 (GLB (0,0) 對應點)
-ORIGIN_LONGITUDE_GLB = 120.996944  # 真實世界原點經度 (GLB (0,0) 對應點)
-# GLB (100, 100) -> (真實): (24.785833 N, 120.997778 E)
+# --- Potou Scene Coordinate Conversion Constants ---
+# Potou場景基準點: GPS (24.9255373543708, 120.97170270744304) 對應前端座標 (-1800, -3500)
+ORIGIN_LATITUDE_POTOU = 24.9255373543708  # Potou場景GPS基準點緯度
+ORIGIN_LONGITUDE_POTOU = 120.97170270744304  # Potou場景GPS基準點經度
+ORIGIN_FRONTEND_X_POTOU = -1800  # 基準點對應的前端X座標 (米)
+ORIGIN_FRONTEND_Y_POTOU = -3500  # 基準點對應的前端Y座標 (米)
+
+# 座標比例因子 (假設1米前端座標 ≈ 約0.000009度經緯度)
+# 這個值需要根據實際測量調整，目前使用估算值
+LATITUDE_SCALE_PER_METER_Y = 0.000009  # 度 / 前端Y單位 (米)
+LONGITUDE_SCALE_PER_METER_X = 0.000009  # 度 / 前端X單位 (米)
+
+# 保留舊的GLB常數作為備用
+ORIGIN_LATITUDE_GLB = 24.786667  # NYCU基準點緯度
+ORIGIN_LONGITUDE_GLB = 120.996944  # NYCU基準點經度
 LATITUDE_SCALE_PER_GLB_Y = -0.000834 / 100  # 度 / GLB Y 單位
 LONGITUDE_SCALE_PER_GLB_X = 0.000834 / 100  # 度 / GLB X 單位
 

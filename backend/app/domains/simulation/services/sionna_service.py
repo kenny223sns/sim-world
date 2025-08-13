@@ -1,6 +1,7 @@
 # backend/app/services/sionna_simulation.py
 import logging
 import os
+import traceback
 import matplotlib.pyplot as plt
 import numpy as np
 from typing import List, Optional, Dict, Any
@@ -26,6 +27,8 @@ from app.core.config import (
     CHANNEL_RESPONSE_IMAGE_PATH,
     SINR_MAP_IMAGE_PATH,
     ISS_MAP_IMAGE_PATH,
+    TSS_MAP_IMAGE_PATH,
+    UAV_SPARSE_MAP_IMAGE_PATH,
     get_scene_xml_path,
 )
 
@@ -50,6 +53,7 @@ import tensorflow as tf
 
 # ISS Map 相關導入
 from scipy.ndimage import gaussian_filter, maximum_filter
+from scipy.interpolate import RegularGridInterpolator
 
 # 從 config 導入
 from app.core.config import NYCU_GLB_PATH, OUTPUT_DIR  # 確保導入 NYCU_GLB_PATH
@@ -70,6 +74,55 @@ except ImportError:
 # --- 新增：場景背景顏色常數 ---
 SCENE_BACKGROUND_COLOR_RGB = [0.5, 0.5, 0.5]
 # --- End Constant ---
+
+# --- 座標轉換工具函數 ---
+def to_sionna_coords(p):
+    """DB/前端座標 -> Sionna座標 (y 取負)"""
+    return [p[0], -p[1], p[2]]
+
+def to_frontend_coords(p):
+    """Sionna座標 -> DB/前端座標 (y 還原)"""
+    return [p[0], -p[1], p[2]]
+
+def to_sionna_xy_from_frontend(xy: tuple[float, float]) -> tuple[float, float]:
+    """(x, y) from DB/Frontend → Sionna (x, -y)"""
+    return (xy[0], -xy[1])
+
+def build_iss_interpolator(x_unique: np.ndarray, y_unique: np.ndarray, iss_dbm: np.ndarray):
+    """
+    建立 2D 內插器，注意 RegularGridInterpolator 的軸順序是 (y, x)
+    iss_dbm shape 必須是 (len(y_unique), len(x_unique))
+    """
+    return RegularGridInterpolator(
+        (y_unique, x_unique), iss_dbm, bounds_error=False, fill_value=np.nan
+    )
+
+def sample_iss_at_points(
+    x_unique: np.ndarray, y_unique: np.ndarray, iss_dbm: np.ndarray,
+    pts_frontend_xy: List[tuple[float, float]],
+    noise_std_db: float = 0.0
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    在指定的前端/DB座標點取樣 ISS (dBm)。
+    回傳: (xs, ys, vals_dbm) 皆為 Sionna 座標平面上的 x/y 與 dBm
+    """
+    if len(pts_frontend_xy) == 0:
+        return np.array([]), np.array([]), np.array([])
+
+    # 轉成 Sionna 平面座標
+    pts_sionna = [to_sionna_xy_from_frontend(p) for p in pts_frontend_xy]
+    interp = build_iss_interpolator(x_unique, y_unique, iss_dbm)
+    # RegularGridInterpolator 要求點為 (y, x) 順序
+    query = np.array([[py, px] for (px, py) in pts_sionna], dtype=np.float64)
+    vals = interp(query)
+
+    if noise_std_db > 0:
+        vals = vals + np.random.normal(0.0, noise_std_db, size=vals.shape)
+
+    xs = np.array([p[0] for p in pts_sionna])
+    ys = np.array([p[1] for p in pts_sionna])
+    return xs, ys, vals
+# --- End 座標轉換工具函數 ---
 
 
 # --- 輔助函數：XML 健康度檢查 ---
@@ -595,7 +648,7 @@ async def generate_cfr_plot(
 
         def add_tx(scene, name, pos, ori, role, power_dbm):
             tx = SionnaTransmitter(
-                name=name, position=pos, orientation=ori, power_dbm=power_dbm
+                name=name, position=to_sionna_coords(pos), orientation=ori, power_dbm=power_dbm
             )
             tx.role = role
             scene.add(tx)
@@ -607,7 +660,7 @@ async def generate_cfr_plot(
         # 添加接收器
         logger.info(f"Adding receiver '{rx_name}' at position {rx_position}")
         rx_name, rx_pos = RX_CONFIG
-        scene.add(SionnaReceiver(name=rx_name, position=rx_pos))
+        scene.add(SionnaReceiver(name=rx_name, position=to_sionna_coords(rx_pos)))
 
         # 分組發射器
         tx_names = list(scene.transmitters.keys())
@@ -724,6 +777,270 @@ async def generate_cfr_plot(
 
 
 # 新增 SINR Map 生成函數
+async def generate_radio_map(
+    session: AsyncSession,
+    output_path: str,
+    scene_name: str = "nycu",
+    sinr_vmin: float = -40,
+    sinr_vmax: float = 0,
+    cell_size: float = 1.0,
+    samples_per_tx: int = 10**7,
+    exclude_jammers: bool = True,
+    center_on_transmitter: bool = True,
+) -> bool:
+    """
+    生成無線電地圖 (可選擇排除干擾源並以發射器為中心)
+    
+    從數據庫獲取發射器設置，計算並生成無線電地圖
+    """
+    logger.info(f"開始生成無線電地圖... exclude_jammers={exclude_jammers}, center_on_transmitter={center_on_transmitter}")
+
+    try:
+        # 準備輸出檔案
+        prepare_output_file(output_path, "無線電地圖圖檔")
+
+        # GPU 設置
+        gpus = _setup_gpu()
+
+        # 創建設備服務和儲存庫
+        device_repository = SQLModelDeviceRepository(session)
+        device_service = DeviceService(device_repository)
+
+        # 從數據庫獲取活動的發射器 (desired)
+        logger.info("從數據庫獲取活動的發射器...")
+        active_desired = await device_service.get_devices(
+            skip=0, limit=100, role=DeviceRole.DESIRED.value, active_only=True
+        )
+
+        # 從數據庫獲取活動的接收器
+        logger.info("從數據庫獲取活動的接收器...")
+        active_receivers = await device_service.get_devices(
+            skip=0, limit=100, role=DeviceRole.RECEIVER.value, active_only=True
+        )
+
+        # 檢查是否有足夠的設備
+        if not active_desired:
+            logger.error("沒有活動的發射器，無法生成無線電地圖")
+            return False
+
+        if not active_receivers:
+            logger.warning("沒有活動的接收器，將使用預設接收器位置")
+            rx_config = ("rx", [-30, 50, 20])
+        else:
+            # 使用第一個活動接收器
+            receiver = active_receivers[0]
+            rx_config = (
+                receiver.name,
+                [receiver.position_x, receiver.position_y, receiver.position_z],
+            )
+
+        # 構建 TX_LIST (只包含發射器，不包含干擾器)
+        tx_list = []
+
+        # 添加發射器
+        for tx in active_desired:
+            tx_name = tx.name
+            tx_position = [tx.position_x, tx.position_y, tx.position_z]
+            tx_orientation = [tx.orientation_x, tx.orientation_y, tx.orientation_z]
+            tx_power = tx.power_dbm
+
+            tx_list.append((tx_name, tx_position, tx_orientation, "desired", tx_power))
+            logger.info(
+                f"添加發射器: {tx_name}, 位置: {tx_position}, 方向: {tx_orientation}, 功率: {tx_power} dBm"
+            )
+
+        # 如果不排除干擾器，則添加它們
+        if not exclude_jammers:
+            logger.info("從數據庫獲取活動的干擾器...")
+            active_jammers = await device_service.get_devices(
+                skip=0, limit=100, role=DeviceRole.JAMMER.value, active_only=True
+            )
+            
+            # 添加干擾器
+            for jammer in active_jammers:
+                jammer_name = jammer.name
+                jammer_position = [jammer.position_x, jammer.position_y, jammer.position_z]
+                jammer_orientation = [
+                    jammer.orientation_x,
+                    jammer.orientation_y,
+                    jammer.orientation_z,
+                ]
+                jammer_power = jammer.power_dbm
+
+                tx_list.append(
+                    (
+                        jammer_name,
+                        jammer_position,
+                        jammer_orientation,
+                        "jammer",
+                        jammer_power,
+                    )
+                )
+                logger.info(
+                    f"添加干擾器: {jammer_name}, 位置: {jammer_position}, 方向: {jammer_orientation}, 功率: {jammer_power} dBm"
+                )
+
+        # 如果沒有足夠的發射器，返回錯誤
+        if not tx_list:
+            logger.error("沒有可用的發射器，無法生成無線電地圖")
+            return False
+
+        # 如果要以發射器為中心，調整地圖區域
+        map_center = None
+        if center_on_transmitter and active_desired:
+            first_tx = active_desired[0]
+            map_center = to_sionna_coords([first_tx.position_x, first_tx.position_y, first_tx.position_z])[:2]
+            logger.info(f"地圖將以發射器為中心: {map_center}")
+
+        # 參數設置
+        scene_xml_path = get_scene_xml_file_path(scene_name)
+        logger.info(f"從 {scene_xml_path} 加載場景")
+
+        tx_array_config = {
+            "num_rows": 1,
+            "num_cols": 1,
+            "vertical_spacing": 0.5,
+            "horizontal_spacing": 0.5,
+            "pattern": "iso",
+            "polarization": "V",
+        }
+        rx_array_config = tx_array_config
+
+        rmsolver_args = {
+            "max_depth": 10,
+            "cell_size": (cell_size, cell_size),
+            "samples_per_tx": samples_per_tx,
+        }
+
+        # 場景設置
+        logger.info("設置場景")
+        scene = load_scene(scene_xml_path)
+        scene.tx_array = PlanarArray(**tx_array_config)
+        scene.rx_array = PlanarArray(**rx_array_config)
+
+        # 清除現有的發射器和接收器
+        for name in list(scene.transmitters.keys()) + list(scene.receivers.keys()):
+            scene.remove(name)
+
+        # 添加發射器
+        logger.info("添加發射器")
+
+        def add_tx(scene, name, pos, ori, role, power_dbm):
+            tx = SionnaTransmitter(
+                name=name, position=to_sionna_coords(pos), orientation=ori, power_dbm=power_dbm
+            )
+            tx.role = role
+            scene.add(tx)
+            return tx
+
+        for name, pos, ori, role, p_dbm in tx_list:
+            add_tx(scene, name, pos, ori, role, p_dbm)
+
+        # 添加接收器
+        rx_name, rx_pos = rx_config
+        logger.info(f"添加接收器 '{rx_name}' 在位置 {rx_pos}")
+        scene.add(SionnaReceiver(name=rx_name, position=to_sionna_coords(rx_pos)))
+
+        # 按角色分組發射器
+        all_txs = [scene.get(n) for n in scene.transmitters]
+        idx_des = [
+            i for i, tx in enumerate(all_txs) if getattr(tx, "role", None) == "desired"
+        ]
+        idx_jam = [
+            i for i, tx in enumerate(all_txs) if getattr(tx, "role", None) == "jammer"
+        ]
+
+        if not idx_des:
+            logger.error("場景中沒有有效的發射器")
+            return False
+
+        # 計算無線電地圖
+        logger.info("計算無線電地圖")
+        rm_solver = RadioMapSolver()
+        rm = rm_solver(scene, **rmsolver_args)
+
+        # 計算並繪製無線電地圖 (不含干擾的RSS)
+        logger.info("計算無線電地圖 (不含干擾)")
+        cc = rm.cell_centers.numpy()
+        x_unique = cc[0, :, 0]
+        y_unique = cc[:, 0, 1]
+        rss_list = [rm.rss[i].numpy() for i in range(len(all_txs))]
+
+        # 只使用目標發射器的RSS
+        rss_clean = sum(rss_list[i] for i in idx_des)
+
+        # 轉換為 dB
+        rss_clean_db = 10 * np.log10(rss_clean + 1e-12)
+
+        # 生成圖表
+        logger.info("生成無線電地圖圖表")
+        fig, ax = plt.subplots(1, 1, figsize=(12, 10))
+
+        # 繪製無線電地圖
+        im = ax.contourf(
+            x_unique,
+            y_unique,
+            rss_clean_db,
+            levels=np.linspace(sinr_vmin, sinr_vmax, 20),
+            cmap="viridis",
+            extend="both",
+        )
+
+        # 標記發射器和接收器位置
+        for tx in active_desired:
+            ax.scatter(
+                tx.position_x,
+                tx.position_y,
+                color="red",
+                s=100,
+                marker="^",
+                edgecolors="white",
+                label=f"TX: {tx.name}",
+            )
+
+        if active_receivers:
+            for rx in active_receivers:
+                ax.scatter(
+                    rx.position_x,
+                    rx.position_y,
+                    color="blue",
+                    s=100,
+                    marker="o",
+                    edgecolors="white",
+                    label=f"RX: {rx.name}",
+                )
+
+        # 設置地圖範圍
+        if center_on_transmitter and map_center:
+            # 以發射器為中心設置範圍
+            range_size = 100  # 100m範圍
+            ax.set_xlim([map_center[0] - range_size, map_center[0] + range_size])
+            ax.set_ylim([map_center[1] - range_size, map_center[1] + range_size])
+
+        ax.set_xlabel("X座標 (m)")
+        ax.set_ylabel("Y座標 (m)")
+        ax.set_title(f"無線電地圖 (不含干擾源) - {scene_name.upper()}")
+        
+        # 添加顏色條
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label("接收信號強度 (dB)")
+
+        # 添加圖例
+        ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
+        logger.info(f"無線電地圖已保存到: {output_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"生成無線電地圖時發生錯誤: {e}")
+        logger.error(traceback.format_exc())
+        return False
+
+
 async def generate_sinr_map(
     session: AsyncSession,
     output_path: str = str(SINR_MAP_IMAGE_PATH),
@@ -864,7 +1181,7 @@ async def generate_sinr_map(
 
         def add_tx(scene, name, pos, ori, role, power_dbm):
             tx = SionnaTransmitter(
-                name=name, position=pos, orientation=ori, power_dbm=power_dbm
+                name=name, position=to_sionna_coords(pos), orientation=ori, power_dbm=power_dbm
             )
             tx.role = role
             scene.add(tx)
@@ -876,7 +1193,7 @@ async def generate_sinr_map(
         # 添加接收器
         rx_name, rx_pos = rx_config
         logger.info(f"添加接收器 '{rx_name}' 在位置 {rx_pos}")
-        scene.add(SionnaReceiver(name=rx_name, position=rx_pos))
+        scene.add(SionnaReceiver(name=rx_name, position=to_sionna_coords(rx_pos)))
 
         # 按角色分組發射器
         all_txs = [scene.get(n) for n in scene.transmitters]
@@ -1140,7 +1457,7 @@ async def generate_doppler_plots(
         # 新增發射機
         def add_tx(scene, name, pos, ori, role, power_dbm):
             tx = SionnaTransmitter(
-                name=name, position=pos, orientation=ori, power_dbm=power_dbm
+                name=name, position=to_sionna_coords(pos), orientation=ori, power_dbm=power_dbm
             )
             tx.role = role
             scene.add(tx)
@@ -1152,7 +1469,7 @@ async def generate_doppler_plots(
         # 新增接收機
         rx_name, rx_pos = rx_config
         logger.info(f"添加接收器 '{rx_name}' 在位置 {rx_pos}")
-        scene.add(SionnaReceiver(name=rx_name, position=rx_pos))
+        scene.add(SionnaReceiver(name=rx_name, position=to_sionna_coords(rx_pos)))
 
         # 分組索引
         tx_names = list(scene.transmitters.keys())
@@ -1446,7 +1763,7 @@ async def generate_channel_response_plots(
 
         def add_tx(scene, name, pos, ori, role, power_dbm):
             tx = SionnaTransmitter(
-                name=name, position=pos, orientation=ori, power_dbm=power_dbm
+                name=name, position=to_sionna_coords(pos), orientation=ori, power_dbm=power_dbm
             )
             tx.role = role
             scene.add(tx)
@@ -1458,7 +1775,7 @@ async def generate_channel_response_plots(
         # 添加接收器
         rx_name, rx_pos = rx_config
         logger.info(f"添加接收器 '{rx_name}' 在位置 {rx_pos}")
-        scene.add(SionnaReceiver(name=rx_name, position=rx_pos))
+        scene.add(SionnaReceiver(name=rx_name, position=to_sionna_coords(rx_pos)))
 
         # 為所有發射器分配速度
         for name, tx in scene.transmitters.items():
@@ -1585,6 +1902,13 @@ async def generate_iss_map(
     force_refresh: bool = False,
     cell_size_override: Optional[float] = None,
     map_size_override: Optional[tuple[int, int]] = None,
+    center_on: str = "receiver",
+    # --- 新增 UAV 稀疏取樣參數 ---
+    uav_points: Optional[List[tuple[float, float]]] = None,  # 前端/DB座標 (x,y)
+    num_random_samples: int = 0,      # 若未提供 uav_points，可隨機抽樣N點
+    sparse_noise_std_db: float = 0.0, # 給稀疏量測加高斯雜訊(分貝)
+    sparse_first_then_full: bool = True,  # 先顯示稀疏點，再顯示完整圖
+    sparse_output_path: Optional[str] = None,  # 若要另外輸出稀疏圖
 ) -> bool:
     """
     生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測
@@ -1616,6 +1940,9 @@ async def generate_iss_map(
         active_jammers = await device_service.get_devices(
             skip=0, limit=100, role=DeviceRole.JAMMER.value, active_only=True
         )
+        
+        # 過濾掉隱藏的干擾器
+        visible_jammers = [j for j in active_jammers if getattr(j, 'visible', True)]
 
         # 從數據庫獲取活動的接收器
         logger.info("從數據庫獲取活動的接收器...")
@@ -1655,7 +1982,7 @@ async def generate_iss_map(
                     "name": jammer.name,
                     "position": [jammer.position_x, jammer.position_y, jammer.position_z],
                     "power_dbm": jammer.power_dbm
-                } for jammer in active_jammers
+                } for jammer in visible_jammers
             ],
             "receiver_devices": [
                 {
@@ -1717,20 +2044,33 @@ async def generate_iss_map(
             logger.info("✗ 無快取數據或設備位置已變更，開始計算新的無線電地圖...")
 
         # 檢查是否有足夠的設備
-        if not active_jammers:
-            logger.error("沒有活動的干擾器，無法生成 ISS 地圖")
-            return False
+        if not visible_jammers:
+            logger.info("沒有可見的干擾器，生成無干擾的 ISS 地圖")
+            # 可以繼續運行，只是沒有干擾器影響
+        else:
+            logger.info(f"找到 {len(visible_jammers)} 個可見的干擾器")
 
         if not active_receivers:
             logger.warning("沒有活動的接收器，將使用預設接收器位置")
-            rx_config = ("rx", [-30, 500, 20])
+            return False
         else:
             # 使用第一個活動接收器
             receiver = active_receivers[0]
-            rx_config = (
-                receiver.name,
-                [receiver.position_x, receiver.position_y, receiver.position_z],
-            )
+            
+            # 檢查是否有RX位置覆蓋（用於實時計算）
+            if position_override and 'rx' in position_override:
+                rx_position = [
+                    position_override['rx']['x'], 
+                    position_override['rx']['y'], 
+                    position_override['rx']['z']
+                ]
+                logger.info(f"使用覆蓋位置 RX: {rx_position}")
+                rx_config = (receiver.name, rx_position)
+            else:
+                rx_config = (
+                    receiver.name,
+                    [receiver.position_x, receiver.position_y, receiver.position_z],
+                )
 
         # 快取邏輯分支
         if cache_hit:
@@ -1741,6 +2081,11 @@ async def generate_iss_map(
             y_unique = cached_data['y_unique']
             peak_coords = cached_data['peak_coords']
             all_txs_info = cached_data['all_txs_info']
+            # 檢查是否有GPS峰值數據，如果沒有則計算
+            if 'peak_locations_gps' in cached_data:
+                peak_locations_gps = cached_data['peak_locations_gps']
+            else:
+                peak_locations_gps = []
             
             logger.info(f"從快取載入 ISS 地圖數據: {iss_dbm.shape}")
         else:
@@ -1770,7 +2115,7 @@ async def generate_iss_map(
                 )
 
             # 添加干擾器 (jammer)
-            for i, jammer in enumerate(active_jammers):
+            for i, jammer in enumerate(visible_jammers):
                 # 檢查是否有位置覆蓋
                 if position_override and 'jammers' in position_override:
                     jammer_positions = position_override['jammers']
@@ -1835,8 +2180,7 @@ async def generate_iss_map(
             # 添加發射器
             transmitters = []
             for tx_info in tx_list:
-                # Convert y coordinate to -y for consistent coordinate system
-                tx_position = [tx_info["position"][0], -tx_info["position"][1], tx_info["position"][2]]
+                tx_position = to_sionna_coords(tx_info["position"])
                 tx = SionnaTransmitter(
                     name=tx_info["name"],
                     position=tx_position,
@@ -1850,22 +2194,53 @@ async def generate_iss_map(
 
             # 添加接收器
             rx_name, rx_pos = rx_config
-            # Convert y coordinate to -y for consistent coordinate system
-            rx_position = [rx_pos[0], -rx_pos[1], rx_pos[2]]
+            rx_position = to_sionna_coords(rx_pos)
             rx = SionnaReceiver(name=rx_name, position=rx_position)
             scene.add(rx)
+
+            # 座標一致性檢查日誌
+            logger.info("=== 座標一致性檢查 ===")
+            for name in scene.transmitters:
+                tx = scene.get(name)
+                logger.info(f"[Sionna] TX {tx.name} pos={tx.position} role={getattr(tx, 'role', None)}")
+            rx_obj = scene.get(rx_name)
+            logger.info(f"[Sionna] RX {rx_obj.name} pos={rx_obj.position}")
+            logger.info("=== 座標檢查完成 ===")
 
             # 計算無線電地圖
             logger.info("計算無線電地圖...")
             logger.info(f"使用解析度: {actual_cell_size} 米/像素")
             logger.info(f"使用地圖大小: {actual_map_size[0]} x {actual_map_size[1]} 像素")
             
+            # 根據center_on參數設定地圖中心
+            if center_on == "transmitter" and tx_list:
+                # 尋找第一個發射機 (desired) 作為中心
+                first_tx = None
+                for tx in tx_list:
+                    if tx["role"] == "desired":
+                        first_tx = tx
+                        break
+                
+                if first_tx:
+                    # 確保座標系統一致
+                    tx_pos = first_tx["position"]
+                    map_center = [tx_pos[0], -tx_pos[1], tx_pos[2]]
+                    logger.info(f"使用發射機({first_tx['name']})位置作為地圖中心: {map_center}")
+                else:
+                    # 如果沒有發射機，回退到接收機
+                    map_center = [rx_position[0], rx_position[1], rx_position[2]]
+                    logger.info(f"未找到發射機，使用接收機位置作為地圖中心: {map_center}")
+            else:
+                # 預設使用接收機位置作為中心
+                map_center = [rx_position[0], rx_position[1], rx_position[2]]
+                logger.info(f"使用接收機位置作為地圖中心: {map_center}")
+            
             rm_solver = RadioMapSolver()
             rm = rm_solver(scene,
                            max_depth=20,           # Maximum number of ray scene interactions
                            samples_per_tx=samples_per_tx, 
                            cell_size=(actual_cell_size, actual_cell_size),      # Resolution of the radio map
-                           center=[0, 0, 1.5],      # Center of the radio map
+                           center=map_center,       # Center of the radio map at receiver position
                            size=actual_map_size,       # Total size of the radio map
                            orientation=[0, 0, 0],
                            refraction=True,
@@ -1895,29 +2270,42 @@ async def generate_iss_map(
             ISS = np.sum(WSS[idx_jam,:,:], axis=0) if idx_jam else np.zeros_like(TSS)
 
             # 使用改進的2D CFAR檢測干擾源位置
-            iss_dbm = 10 * np.log10(ISS / 1e-3)
+            # 避免除零錯誤，設置最小值
+            ISS_safe = np.maximum(ISS, 1e-12)  # 設置最小值為 1e-12 (避免 log10(0))
+            iss_dbm = 10 * np.log10(ISS_safe / 1e-3)
+            logger.info(f"ISS 原始數據統計: min={np.min(ISS):.2e}, max={np.max(ISS):.2e}, 零值數量={np.sum(ISS == 0)}")
+            
+            # 計算 TSS (Total Signal Strength) - 所有發射器的信號強度加總
+            TSS_safe = np.maximum(TSS, 1e-12)
+            TSS_dbm = 10 * np.log10(TSS_safe / 1e-3)
+            logger.info(f"TSS 原始數據統計: min={np.min(TSS):.2e}, max={np.max(TSS):.2e}, 零值數量={np.sum(TSS == 0)}")
 
-            # 平滑化處理（選擇性）
-            ISS_smooth = gaussian_filter(iss_dbm, sigma=gaussian_sigma)
-
-            # 2D-CFAR 偵測
+            # 準備 ISS 地圖數據和 CFAR 檢測
+            iss_smooth = gaussian_filter(iss_dbm, sigma=gaussian_sigma)
+            logger.info(f"生成 ISS 地圖 - 執行 2D-CFAR 檢測")
+            
+            # 2D-CFAR 偵測 (僅對 ISS 執行)
             # 先做最大值過濾 (局部最大值)
-            local_max = maximum_filter(ISS_smooth, size=5)
-            peaks = (ISS_smooth == local_max)
+            local_max = maximum_filter(iss_smooth, size=5)
+            peaks = (iss_smooth == local_max)
 
             # 設定強度門檻（百分位數）
-            threshold = np.percentile(ISS_smooth, cfar_threshold_percentile)
-
+            threshold = np.percentile(iss_smooth, cfar_threshold_percentile)
+            
             # 使用 peak_local_max 找出高於門檻的最大值座標
             if peak_local_max is not None:
                 peak_coords = peak_local_max(
-                    ISS_smooth,
+                    iss_smooth,
                     min_distance=min_distance,           # 限制峰與峰最小距離
                     threshold_abs=threshold   # 絕對強度門檻
                 )
             else:
                 # 簡化版本的峰值檢測
-                peak_coords = np.column_stack(np.where((peaks) & (ISS_smooth > threshold)))
+                peak_coords = np.column_stack(np.where((peaks) & (iss_smooth > threshold)))
+
+            # 準備 TSS 地圖數據 (不需要 CFAR 檢測)
+            tss_smooth = gaussian_filter(TSS_dbm, sigma=gaussian_sigma)
+            logger.info(f"生成 TSS 地圖 - 不執行 CFAR 檢測")
 
             # 保存發射器信息用於可視化
             all_txs_info = [
@@ -1929,6 +2317,51 @@ async def generate_iss_map(
                 for tx in all_txs
             ]
             
+            # 計算峰值的GPS座標
+            peak_locations_gps = []
+            if len(peak_coords) > 0:
+                logger.info(f"計算 {len(peak_coords)} 個CFAR峰值的GPS座標...")
+                from app.api.v1.interference.routes_sparse_scan import frontend_coords_to_gps
+                
+                for i, coord in enumerate(peak_coords):
+                    # coord = [row, col] in the ISS map grid
+                    row_idx, col_idx = coord[0], coord[1]
+                    
+                    # 確保索引在有效範圍內
+                    if 0 <= row_idx < len(y_unique) and 0 <= col_idx < len(x_unique):
+                        # 從grid座標轉換為實際座標（Sionna座標系）
+                        x_sionna = float(x_unique[col_idx])
+                        y_sionna = float(y_unique[row_idx])
+                        
+                        # 從Sionna座標轉換為前端座標
+                        frontend_coords = to_frontend_coords([x_sionna, y_sionna, 0])
+                        x_frontend = frontend_coords[0]
+                        y_frontend = frontend_coords[1]
+                        
+                        # 轉換為GPS座標
+                        gps_coord = frontend_coords_to_gps(x_frontend, y_frontend, 0.0)
+                        
+                        # 獲取該位置的ISS強度值
+                        iss_value = float(iss_dbm[row_idx, col_idx]) if row_idx < iss_dbm.shape[0] and col_idx < iss_dbm.shape[1] else 0.0
+                        
+                        peak_info = {
+                            "peak_id": i + 1,
+                            "grid_coords": {"row": int(row_idx), "col": int(col_idx)},
+                            "sionna_coords": {"x": x_sionna, "y": y_sionna},
+                            "frontend_coords": {"x": x_frontend, "y": y_frontend},
+                            "gps_coords": {
+                                "latitude": gps_coord.latitude,
+                                "longitude": gps_coord.longitude,
+                                "altitude": gps_coord.altitude
+                            },
+                            "iss_strength_dbm": iss_value
+                        }
+                        peak_locations_gps.append(peak_info)
+                        
+                        logger.info(f"CFAR峰值 {i+1}: Grid({row_idx}, {col_idx}) -> Frontend({x_frontend:.1f}, {y_frontend:.1f}) -> GPS({gps_coord.latitude:.6f}, {gps_coord.longitude:.6f}), ISS: {iss_value:.1f} dBm")
+                    else:
+                        logger.warning(f"峰值索引 {coord} 超出grid範圍 {iss_dbm.shape}")
+            
             # 保存計算結果到快取
             logger.info("保存計算結果到快取...")
             generate_iss_map._iss_cache[cache_key] = {
@@ -1936,6 +2369,7 @@ async def generate_iss_map(
                 'x_unique': x_unique,
                 'y_unique': y_unique,
                 'peak_coords': peak_coords,
+                'peak_locations_gps': peak_locations_gps,
                 'all_txs_info': all_txs_info,
                 'timestamp': time.time()
             }
@@ -1943,51 +2377,207 @@ async def generate_iss_map(
 
         # 在此處，不管是從快取還是新計算的數據都已準備好
 
-        # 可視化
-        logger.info("生成 ISS 地圖可視化")
-        plt.figure(figsize=(8, 6))
+        # ====== [新增] UAV 稀疏點抽樣與預覽 ======
+        sparse_done = False
+        if sparse_first_then_full and (uav_points or num_random_samples > 0):
+            # 1) 準備 UAV 取樣點（前端/DB座標系）
+            if uav_points:
+                pts_frontend = uav_points
+            else:
+                # 在完整圖的範圍內隨機抽樣
+                # 注意：x_unique/y_unique 已是 Sionna 座標，前端是 y 取負
+                # 這裡我們直接在「前端座標空間」抽樣，再轉 Sionna 做取樣
+                xmin, xmax = float(np.min(x_unique)), float(np.max(x_unique))
+                ymin, ymax = float(np.min(y_unique)), float(np.max(y_unique))
+                # 轉回前端範圍（y 軸反號）：y_front = -y_sionna
+                y_front_min, y_front_max = -ymax, -ymin
+                rng = np.random.default_rng(1234)
+                xs_rand = rng.uniform(xmin, xmax, size=num_random_samples)
+                ys_rand_front = rng.uniform(y_front_min, y_front_max, size=num_random_samples)
+                pts_frontend = list(zip(xs_rand, ys_rand_front))
+
+            # 2) 在這些點上取樣 ISS(dBm)
+            sparse_x_sionna, sparse_y_sionna, sparse_vals_dbm = sample_iss_at_points(
+                x_unique, y_unique, iss_dbm, pts_frontend, noise_std_db=sparse_noise_std_db
+            )
+
+            # 3) 繪製稀疏預覽圖（只顯示量測點）
+            fig_s, ax_s = plt.subplots(figsize=(7, 5))
+            sc = ax_s.scatter(
+                sparse_x_sionna, sparse_y_sionna,
+                c=sparse_vals_dbm, s=22, marker='o'
+            )
+            cbar_s = plt.colorbar(sc, ax=ax_s, label="Measured ISS (dBm)")
+            ax_s.set_xlabel("x (m)")
+            ax_s.set_ylabel("y (m)")
+            ax_s.set_title("UAV Sparse ISS Samples")
+
+            # 畫設備位置（用 Sionna 座標）
+            for tx_info in all_txs_info:
+                if tx_info['role'] == 'desired':
+                    ax_s.scatter(tx_info['position'][0], tx_info['position'][1],
+                                 c='blue', marker='^', s=80, label='Desired Tx')
+            for tx_info in all_txs_info:
+                if tx_info['role'] == 'jammer':
+                    ax_s.scatter(tx_info['position'][0], tx_info['position'][1],
+                                 c='red', marker='x', s=80, label='Jammer')
+            # 獲取接收器位置
+            rx_name, rx_pos = rx_config
+            rx_obj = scene.get(rx_name)
+            if rx_obj:
+                ax_s.scatter(rx_obj.position[0], rx_obj.position[1],
+                             c='green', marker='o', s=50, label='Rx')
+
+            # 去重 legend
+            handles, labels = ax_s.get_legend_handles_labels()
+            uniq = dict(zip(labels, handles))
+            if len(uniq) > 0:
+                ax_s.legend(uniq.values(), uniq.keys(), loc="best")
+
+            plt.tight_layout()
+
+            # 是否另存檔（可與完整圖同資料夾，檔名自動加 _sparse）
+            sparse_path = sparse_output_path or (
+                os.path.splitext(output_path)[0] + "_sparse.png"
+            )
+            prepare_output_file(sparse_path, "ISS 稀疏預覽圖檔")
+            plt.savefig(sparse_path, dpi=300, bbox_inches="tight")
+            plt.close(fig_s)
+            logger.info(f"UAV 稀疏 ISS 預覽已保存: {sparse_path}")
+            sparse_done = True
+        # ====== [新增結束] ======
+
+        # 同時生成 ISS 和 TSS 兩張地圖
+        logger.info("同時生成 ISS 和 TSS 地圖可視化")
+        logger.info(f"ISS 地圖數據統計: min={np.min(iss_dbm):.2f} dBm, max={np.max(iss_dbm):.2f} dBm, mean={np.mean(iss_dbm):.2f} dBm")
+        logger.info(f"TSS 地圖數據統計: min={np.min(TSS_dbm):.2f} dBm, max={np.max(TSS_dbm):.2f} dBm, mean={np.mean(TSS_dbm):.2f} dBm")
+        logger.info(f"地圖形狀: {iss_dbm.shape}, 座標範圍: x=[{np.min(x_unique):.1f}, {np.max(x_unique):.1f}], y=[{np.min(y_unique):.1f}, {np.max(y_unique):.1f}]")
+        
         # Use meshgrid like SINR map for consistent coordinate handling
         X, Y = np.meshgrid(x_unique, y_unique)
-        plt.pcolormesh(X, Y, iss_dbm, shading='nearest', cmap='viridis')
-        plt.colorbar(label="ISS (dBm)")
-        plt.title("ISS Map with 2D-CFAR Peak Detection")
         
-        # 標記檢測到的峰值
-        if len(peak_coords) > 0:
-            peak_x = x_unique[peak_coords[:, 1]]
-            peak_y = y_unique[peak_coords[:, 0]]
-            plt.scatter(peak_x, peak_y, color='r', marker='+', label='2D-CFAR Peaks')
+        # 生成 ISS 地圖
+        def generate_map_visualization(data_dbm, map_title, output_path, include_peaks=False, peak_coords_data=None):
+            plt.figure(figsize=(8, 6))
+            
+            # 檢查是否有有效數據
+            if np.all(np.isnan(data_dbm)) or np.all(data_dbm == -np.inf):
+                logger.warning(f"{map_title} 地圖數據全為 NaN 或 -inf，將使用全零數據")
+                data_dbm = np.zeros_like(data_dbm)
+            
+            # 設置顏色範圍來改善可視化效果
+            vmin = np.percentile(data_dbm[np.isfinite(data_dbm)], 5) if np.any(np.isfinite(data_dbm)) else -80
+            vmax = np.percentile(data_dbm[np.isfinite(data_dbm)], 95) if np.any(np.isfinite(data_dbm)) else -20
+            
+            plt.pcolormesh(X, Y, data_dbm, shading='nearest', cmap='viridis', vmin=vmin, vmax=vmax)
+            plt.colorbar(label=f"{map_title} (dBm)")
+            plt.title(map_title)
+            
+            # 標記檢測到的峰值 (僅限 ISS 模式)
+            if include_peaks and peak_coords_data is not None and len(peak_coords_data) > 0:
+                peak_x = x_unique[peak_coords_data[:, 1]]
+                peak_y = y_unique[peak_coords_data[:, 0]]
+                plt.scatter(peak_x, peak_y, color='r', marker='+', s=100, label='2D-CFAR Peaks')
+                
+            return plt
+            
+        # 添加設備位置繪製的共用函數
+        def add_device_positions(rx_config, all_txs_info, scene):
+            # 期望發射器（藍色三角形）
+            for tx_info in all_txs_info:
+                if tx_info['role'] == 'desired':
+                    plt.scatter(tx_info['position'][0], tx_info['position'][1], c='blue', marker='^', s=100, label='Desired Tx')
+            
+            # 干擾器（紅色X）
+            for tx_info in all_txs_info:
+                if tx_info['role'] == 'jammer':
+                    plt.scatter(tx_info['position'][0], tx_info['position'][1], c='red', marker='x', s=100, label='Jammer')
+            
+            # 接收器（綠色圓圈）
+            rx_name, rx_pos = rx_config
+            rx_obj = scene.get(rx_name)
+            if rx_obj:
+                plt.scatter(rx_obj.position[0], rx_obj.position[1], c='green', marker='o', s=50, label='Rx')
 
-        # 繪製設備位置 - 使用快取友好的數據結構
-        # 期望發射器（藍色三角形）
-        for tx_info in all_txs_info:
-            if tx_info['role'] == 'desired':
-                plt.scatter(tx_info['position'][0], tx_info['position'][1], c='blue', marker='^', s=100, label='Desired Tx')
-        
-        # 干擾器（紅色X）
-        for tx_info in all_txs_info:
-            if tx_info['role'] == 'jammer':
-                plt.scatter(tx_info['position'][0], tx_info['position'][1], c='red', marker='x', s=100, label='Jammer')
-        
-        # 接收器（綠色圓圈）
-        rx_name, rx_pos = rx_config
-        plt.scatter(rx_pos[0], rx_pos[1], c='green', marker='o', s=50, label='Rx')
-
+        # 1. 生成 ISS 地圖 
+        generate_map_visualization(iss_dbm, "ISS Map with 2D-CFAR Peak Detection", str(ISS_MAP_IMAGE_PATH), 
+                                   include_peaks=True, peak_coords_data=peak_coords)
+        add_device_positions(rx_config, all_txs_info, scene)
         plt.tight_layout()
         plt.legend()
-
-        # 保存圖片
-        logger.info(f"保存 ISS 地圖到 {output_path}")
-        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+        logger.info(f"保存 ISS 地圖到 {ISS_MAP_IMAGE_PATH}")
+        plt.savefig(str(ISS_MAP_IMAGE_PATH), dpi=300, bbox_inches="tight")
         plt.close()
+
+        # 2. 生成 TSS 地圖
+        generate_map_visualization(TSS_dbm, "TSS Map - Total Signal Strength", str(TSS_MAP_IMAGE_PATH), 
+                                   include_peaks=False)
+        add_device_positions(rx_config, all_txs_info, scene)
+        plt.tight_layout()
+        plt.legend()
+        logger.info(f"保存 TSS 地圖到 {TSS_MAP_IMAGE_PATH}")
+        plt.savefig(str(TSS_MAP_IMAGE_PATH), dpi=300, bbox_inches="tight")
+        plt.close()
+
+        # 3. 生成 UAV Sparse 地圖 (如果有 UAV 點資料)
+        uav_sparse_success = True
+        if uav_points and len(uav_points) > 0:
+            logger.info(f"生成 UAV Sparse 地圖 - 使用 {len(uav_points)} 個 UAV 掃描點")
+            
+            # 從 TSS 地圖在 UAV 點位置取樣
+            sparse_x_sionna, sparse_y_sionna, sparse_vals_dbm = sample_iss_at_points(
+                x_unique, y_unique, TSS_dbm, uav_points, noise_std_db=sparse_noise_std_db
+            )
+            
+            # 創建 UAV Sparse 地圖可視化
+            plt.figure(figsize=(8, 6))
+            
+            # 使用和 TSS 相同的顏色範圍
+            vmin = np.percentile(TSS_dbm[np.isfinite(TSS_dbm)], 5) if np.any(np.isfinite(TSS_dbm)) else -80
+            vmax = np.percentile(TSS_dbm[np.isfinite(TSS_dbm)], 95) if np.any(np.isfinite(TSS_dbm)) else -20
+            
+            # 繪製稀疏點
+            sc = plt.scatter(
+                sparse_x_sionna, sparse_y_sionna,
+                c=sparse_vals_dbm, s=50, marker='o', cmap='viridis', 
+                vmin=vmin, vmax=vmax, alpha=0.8
+            )
+            
+            plt.colorbar(sc, label="UAV Sparse TSS (dBm)")
+            plt.title("UAV Sparse Map - UAV Trajectory TSS Sampling")
+            plt.xlabel("x (m)")
+            plt.ylabel("y (m)")
+            
+            # 添加設備位置
+            add_device_positions(rx_config, all_txs_info, scene)
+            
+            # 添加 UAV 軌跡線（連接稀疏點）
+            if len(sparse_x_sionna) > 1:
+                plt.plot(sparse_x_sionna, sparse_y_sionna, 'k--', alpha=0.3, linewidth=1, label='UAV Trajectory')
+            
+            plt.tight_layout()
+            plt.legend()
+            logger.info(f"保存 UAV Sparse 地圖到 {UAV_SPARSE_MAP_IMAGE_PATH}")
+            plt.savefig(str(UAV_SPARSE_MAP_IMAGE_PATH), dpi=300, bbox_inches="tight")
+            plt.close()
+            
+            # 檢查 UAV Sparse 地圖文件是否生成成功
+            uav_sparse_success = verify_output_file(str(UAV_SPARSE_MAP_IMAGE_PATH))
+            logger.info(f"UAV Sparse 地圖生成 {'成功' if uav_sparse_success else '失敗'}")
+        else:
+            logger.info("未提供 UAV 點資料，跳過 UAV Sparse 地圖生成")
 
         # 記錄檢測結果
         logger.info(f"檢測到 {len(peak_coords)} 個干擾源峰值")
         for i, coord in enumerate(peak_coords):
             logger.info(f"峰值 {i+1}: 行={coord[0]}, 列={coord[1]}")
+        logger.info("ISS, TSS 和 UAV Sparse 地圖都已生成完成")
 
-        # 檢查文件是否生成成功
-        return verify_output_file(output_path)
+        # 檢查所有文件是否都生成成功
+        iss_success = verify_output_file(str(ISS_MAP_IMAGE_PATH))
+        tss_success = verify_output_file(str(TSS_MAP_IMAGE_PATH))
+        
+        return iss_success and tss_success and uav_sparse_success
 
     except Exception as e:
         logger.exception(f"生成 ISS 地圖時發生錯誤: {e}")
@@ -2075,6 +2665,34 @@ class SionnaSimulationService(SimulationServiceInterface):
             samples_per_tx=samples_per_tx,
         )
 
+    async def generate_radio_map(
+        self,
+        session: AsyncSession,
+        output_path: str,
+        scene_name: str = "nycu",
+        sinr_vmin: float = -40.0,
+        sinr_vmax: float = 0.0,
+        cell_size: float = 1.0,
+        samples_per_tx: int = 10**7,
+        exclude_jammers: bool = True,
+        center_on_transmitter: bool = True,
+    ) -> bool:
+        """生成無線電地圖 (可選擇排除干擾源)"""
+        logger.info(
+            f"SionnaSimulationService: Calling global generate_radio_map, output_path: {output_path}, scene: {scene_name}"
+        )
+        return await generate_radio_map(
+            session=session,
+            output_path=output_path,
+            scene_name=scene_name,
+            sinr_vmin=sinr_vmin,
+            sinr_vmax=sinr_vmax,
+            cell_size=cell_size,
+            samples_per_tx=samples_per_tx,
+            exclude_jammers=exclude_jammers,
+            center_on_transmitter=center_on_transmitter,
+        )
+
     async def generate_doppler_plots(
         self, session: AsyncSession, output_path: str, scene_name: str = "nycu"
     ) -> bool:
@@ -2114,6 +2732,13 @@ class SionnaSimulationService(SimulationServiceInterface):
         force_refresh: bool = False,
         cell_size_override: Optional[float] = None,
         map_size_override: Optional[tuple[int, int]] = None,
+        center_on: str = "receiver",
+        # --- 新增 UAV 稀疏取樣參數 ---
+        uav_points: Optional[List[tuple[float, float]]] = None,
+        num_random_samples: int = 0,
+        sparse_noise_std_db: float = 0.0,
+        sparse_first_then_full: bool = True,
+        sparse_output_path: Optional[str] = None,
     ) -> bool:
         """生成干擾信號強度 (ISS) 地圖並進行 2D-CFAR 檢測"""
         logger.info(
@@ -2135,6 +2760,12 @@ class SionnaSimulationService(SimulationServiceInterface):
             force_refresh=force_refresh,
             cell_size_override=cell_size_override,
             map_size_override=map_size_override,
+            center_on=center_on,
+            uav_points=uav_points,
+            num_random_samples=num_random_samples,
+            sparse_noise_std_db=sparse_noise_std_db,
+            sparse_first_then_full=sparse_first_then_full,
+            sparse_output_path=sparse_output_path,
         )
 
     async def run_simulation(

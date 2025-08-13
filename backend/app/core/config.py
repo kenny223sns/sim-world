@@ -78,6 +78,7 @@ OUTPUT_DIR = STATIC_IMAGES_DIR
 # 圖片檔案完整路徑 (使用 Path 對象)
 CFR_PLOT_IMAGE_PATH = OUTPUT_DIR / "cfr_plot.png"  # CFR 圖像路徑
 SINR_MAP_IMAGE_PATH = OUTPUT_DIR / "sinr_map.png"  # SINR 地圖路徑
+RADIO_MAP_IMAGE_PATH = OUTPUT_DIR / "radio_map.png"  # 無線電地圖路徑 (不含干擾源)
 # 延遲多普勒圖路徑
 DOPPLER_IMAGE_PATH = OUTPUT_DIR / "delay_doppler.png"  # 延遲多普勒圖路徑
 # 通道響應圖路徑
@@ -87,6 +88,14 @@ logger.info(f"Time-Frequency Image Path (in container): {CHANNEL_RESPONSE_IMAGE_
 # ISS 地圖路徑
 ISS_MAP_IMAGE_PATH = OUTPUT_DIR / "iss_map.png"  # ISS 地圖路徑
 logger.info(f"ISS Map Image Path (in container): {ISS_MAP_IMAGE_PATH}")
+
+# TSS 地圖路徑
+TSS_MAP_IMAGE_PATH = OUTPUT_DIR / "tss_map.png"  # TSS 地圖路徑
+logger.info(f"TSS Map Image Path (in container): {TSS_MAP_IMAGE_PATH}")
+
+# UAV Sparse 地圖路徑
+UAV_SPARSE_MAP_IMAGE_PATH = OUTPUT_DIR / "uav_sparse_map.png"  # UAV Sparse 地圖路徑
+logger.info(f"UAV Sparse Map Image Path (in container): {UAV_SPARSE_MAP_IMAGE_PATH}")
 
 # logger.info(f"Project Root (estimated): {PROJECT_ROOT}") # 不再需要
 logger.info(f"Static Directory (in container): {STATIC_DIR}")

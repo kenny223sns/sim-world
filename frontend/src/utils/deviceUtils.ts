@@ -13,6 +13,7 @@ export const convertBackendToFrontend = (backendDevice: Device): Device => {
         orientation_z: backendDevice.orientation_z,
         power_dbm: backendDevice.power_dbm,
         active: backendDevice.active,
+        visible: backendDevice.visible,
         role: backendDevice.role,
     }
 }

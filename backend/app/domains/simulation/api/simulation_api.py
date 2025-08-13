@@ -11,6 +11,8 @@ from app.core.config import (
     DOPPLER_IMAGE_PATH,
     CHANNEL_RESPONSE_IMAGE_PATH,
     ISS_MAP_IMAGE_PATH,
+    TSS_MAP_IMAGE_PATH,
+    UAV_SPARSE_MAP_IMAGE_PATH,
     get_scene_xml_path,
 )
 from app.domains.simulation.models.simulation_model import (
@@ -118,6 +120,45 @@ async def get_sinr_map(
         raise HTTPException(status_code=500, detail=f"生成 SINR 地圖時出錯: {str(e)}")
 
 
+@router.get("/radio-map", response_description="無線電地圖 (不含干擾源)")
+async def get_radio_map(
+    session: AsyncSession = Depends(get_session),
+    scene: str = Query("nycu", description="場景名稱 (nycu, lotus)"),
+    sinr_vmin: float = Query(-40.0, description="SINR 最小值 (dB)"),
+    sinr_vmax: float = Query(0.0, description="SINR 最大值 (dB)"),
+    cell_size: float = Query(1.0, description="Radio map 網格大小 (m)"),
+    samples_per_tx: int = Query(10**7, description="每個發射器的採樣數量"),
+    center_on_transmitter: bool = Query(True, description="是否以發射器為中心"),
+):
+    """產生並回傳無線電地圖 (不含干擾源，可選以發射器為中心)"""
+    logger.info(
+        f"--- API Request: /radio-map?scene={scene}&sinr_vmin={sinr_vmin}&sinr_vmax={sinr_vmax}&cell_size={cell_size}&samples_per_tx={samples_per_tx}&center_on_transmitter={center_on_transmitter} ---"
+    )
+
+    try:
+        from app.core.config import RADIO_MAP_IMAGE_PATH
+        
+        success = await sionna_service.generate_radio_map(
+            session=session,
+            output_path=str(RADIO_MAP_IMAGE_PATH),
+            scene_name=scene,
+            sinr_vmin=sinr_vmin,
+            sinr_vmax=sinr_vmax,
+            cell_size=cell_size,
+            samples_per_tx=samples_per_tx,
+            exclude_jammers=True,
+            center_on_transmitter=center_on_transmitter,
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="產生無線電地圖失敗")
+
+        return create_image_response(str(RADIO_MAP_IMAGE_PATH), "radio_map.png")
+    except Exception as e:
+        logger.error(f"生成無線電地圖時出錯: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成無線電地圖時出錯: {str(e)}")
+
+
 @router.get("/doppler-plots", response_description="延遲多普勒圖")
 async def get_doppler_plots(
     session: AsyncSession = Depends(get_session),
@@ -173,16 +214,31 @@ async def get_iss_map(
     tx_x: Optional[float] = Query(None, description="TX位置X座標 (米)"),
     tx_y: Optional[float] = Query(None, description="TX位置Y座標 (米)"),
     tx_z: Optional[float] = Query(None, description="TX位置Z座標 (米)"),
+    rx_x: Optional[float] = Query(None, description="RX位置X座標 (米) - 用於實時計算"),
+    rx_y: Optional[float] = Query(None, description="RX位置Y座標 (米) - 用於實時計算"),
+    rx_z: Optional[float] = Query(None, description="RX位置Z座標 (米) - 用於實時計算"),
     jammer: List[str] = Query([], description="Jammer位置列表 (格式: x,y,z)"),
     force_refresh: bool = Query(False, description="強制重新生成地圖，忽略快取"),
     cell_size: Optional[float] = Query(None, gt=0.1, lt=20.0, description="地圖解析度 (米/像素)"),
     map_width: Optional[int] = Query(None, gt=64, lt=8192, description="地圖寬度 (像素)"),
     map_height: Optional[int] = Query(None, gt=64, lt=8192, description="地圖高度 (像素)"),
+    center_on: str = Query("receiver", description="地圖中心選擇 (receiver/transmitter)"),
+    cfar_threshold_percentile: float = Query(99.5, ge=90.0, le=99.9, description="CFAR 檢測門檻百分位數"),
+    gaussian_sigma: float = Query(1.0, ge=0.1, le=5.0, description="高斯平滑參數"),
+    min_distance: int = Query(3, ge=1, le=20, description="峰值檢測最小距離"),
+    samples_per_tx: int = Query(10000000, ge=100000, le=100000000, description="每發射器採樣數量"),
+    # --- 新增 UAV 稀疏取樣參數 ---
+    uav_points: Optional[str] = Query(None, description="UAV取樣點座標串 (格式: x1,y1;x2,y2;...)"),
+    num_random_samples: int = Query(0, ge=0, le=100, description="隨機取樣點數量 (若無UAV點)"),
+    sparse_noise_std_db: float = Query(0.0, ge=0.0, le=10.0, description="稀疏量測雜訊標準差 (dB)"),
+    sparse_first_then_full: bool = Query(False, description="先顯示稀疏取樣再顯示完整地圖"),
 ):
     """產生並回傳干擾信號檢測地圖 (使用 2D-CFAR 技術)"""
-    logger.info(f"--- API Request: /iss-map?scene={scene}, force_refresh={force_refresh} ---")
+    logger.info(f"--- API Request: /iss-map?scene={scene}, force_refresh={force_refresh}, center_on={center_on} ---")
     if tx_x is not None and tx_y is not None:
         logger.info(f"TX位置參數: ({tx_x}, {tx_y}, {tx_z})")
+    if rx_x is not None and rx_y is not None:
+        logger.info(f"RX位置參數: ({rx_x}, {rx_y}, {rx_z})")
     if jammer:
         for i, jam_pos_str in enumerate(jammer):
             logger.info(f"Jammer {i+1} 位置參數: {jam_pos_str}")
@@ -197,8 +253,16 @@ async def get_iss_map(
         if tx_x is not None and tx_y is not None:
             position_override['tx'] = {
                 'x': tx_x,
-                'y': tx_y, 
+                'y': tx_y,  # 不在這裡轉換座標，讓 to_sionna_coords 統一處理
                 'z': tx_z if tx_z is not None else 30.0
+            }
+        
+        # 添加RX位置覆蓋支持（用於實時計算）
+        if rx_x is not None and rx_y is not None:
+            position_override['rx'] = {
+                'x': rx_x,
+                'y': rx_y,  # 不在這裡轉換座標，讓 to_sionna_coords 統一處理
+                'z': rx_z if rx_z is not None else 30.0
             }
         
         # 處理多個 jammer 位置
@@ -207,6 +271,7 @@ async def get_iss_map(
             for jam_pos_str in jammer:
                 try:
                     x, y, z = map(float, jam_pos_str.split(','))
+                    # 不在這裡轉換座標，讓 to_sionna_coords 統一處理
                     jammer_positions.append({'x': x, 'y': y, 'z': z})
                 except (ValueError, IndexError) as e:
                     logger.warning(f"無效的 jammer 位置格式: {jam_pos_str}, 錯誤: {e}")
@@ -214,6 +279,22 @@ async def get_iss_map(
             if jammer_positions:
                 position_override['jammers'] = jammer_positions
             
+        # 處理 UAV 點座標串解析 (保持前端座標系，讓Service層統一轉換)
+        parsed_uav_points = None
+        if uav_points:
+            try:
+                parsed_uav_points = []
+                point_pairs = uav_points.split(';')
+                for pair in point_pairs:
+                    if pair.strip():  # 略過空字串
+                        x, y = map(float, pair.split(','))
+                        # 保持前端座標系，讓Service層統一轉換
+                        parsed_uav_points.append((x, y))
+                logger.info(f"解析到 {len(parsed_uav_points)} 個 UAV 取樣點 (前端座標系)")
+            except (ValueError, IndexError) as e:
+                logger.warning(f"無效的 UAV 點座標格式: {uav_points}, 錯誤: {e}")
+                parsed_uav_points = None
+        
         # 添加大小限制保護
         if map_width is not None and map_height is not None:
             if map_width * map_height > 16_000_000:  # 限制在1600萬像素以內 (約4000x4000)
@@ -226,7 +307,17 @@ async def get_iss_map(
             position_override=position_override,
             force_refresh=force_refresh,
             cell_size_override=cell_size,
-            map_size_override=(map_width, map_height) if map_width is not None and map_height is not None else None
+            map_size_override=(map_width, map_height) if map_width is not None and map_height is not None else None,
+            center_on=center_on,
+            cfar_threshold_percentile=cfar_threshold_percentile,
+            gaussian_sigma=gaussian_sigma,
+            min_distance=min_distance,
+            samples_per_tx=samples_per_tx,
+            # 新增稀疏採樣參數
+            uav_points=parsed_uav_points,
+            num_random_samples=num_random_samples,
+            sparse_noise_std_db=sparse_noise_std_db,
+            sparse_first_then_full=sparse_first_then_full,
         )
 
         if not success:
@@ -236,6 +327,28 @@ async def get_iss_map(
     except Exception as e:
         logger.error(f"生成干擾信號檢測地圖時出錯: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"生成干擾信號檢測地圖時出錯: {str(e)}")
+
+
+@router.get("/tss-map")
+async def get_tss_map():
+    """返回 TSS (Total Signal Strength) 地圖"""
+    logger.info("--- API Request: /tss-map ---")
+    try:
+        return create_image_response(str(TSS_MAP_IMAGE_PATH), "tss_map.png")
+    except Exception as e:
+        logger.error(f"返回 TSS 地圖時出錯: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"返回 TSS 地圖時出錯: {str(e)}")
+
+
+@router.get("/uav-sparse-map")
+async def get_uav_sparse_map():
+    """返回 UAV Sparse 地圖"""
+    logger.info("--- API Request: /uav-sparse-map ---")
+    try:
+        return create_image_response(str(UAV_SPARSE_MAP_IMAGE_PATH), "uav_sparse_map.png")
+    except Exception as e:
+        logger.error(f"返回 UAV Sparse 地圖時出錯: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"返回 UAV Sparse 地圖時出錯: {str(e)}")
 
 
 @router.post("/run", response_model=Dict[str, Any])

@@ -10,7 +10,9 @@ import { Device } from '../../types/device'
 import { VisibleSatelliteInfo } from '../../types/satellite'
 import { UseDroneTrackingReturn } from '../../hooks/useDroneTracking'
 import { useSparseUAVScan } from '../../hooks/useSparseUAVScan'
+import { useUAVScanContext } from '../../contexts/UAVScanContext'
 import { worldToCanvasPct, debugCoordTransform, getAxisInfo } from '../../utils/coordUtils'
+import { generateSparseISSMap, getDroneTrackingPoints } from '../../services/sparseISSMapApi'
 
 // 添加圖例组件
 const SatelliteLegend = () => {
@@ -74,14 +76,23 @@ export default function SceneView({
         speed: 2
     })
     
+    // Sparse ISS map generation state
+    const [sparseMapGenerating, setSparseMapGenerating] = useState(false)
+    const [sparseMapUrl, setSparseMapUrl] = useState<string | null>(null)
+    const [sparseMapError, setSparseMapError] = useState<string | null>(null)
+    
     // Use sparse UAV scan hook
     const sparseScan = useSparseUAVScan({
         scene: sceneName || 'Nanliao',
         step_x: scanParams.step_x,
         step_y: scanParams.step_y,
         speed: scanParams.speed,
-        autoStart: false
+        autoStart: false,
+        devices: devices  // 傳遞設備列表以監聽設備變化
     })
+    
+    // Use UAV scan context to share scan data with other components
+    const { updateScanData } = useUAVScanContext()
     
     // Use passed droneTracking or create fallback
     const { isTracking, recordPosition } = droneTracking || { isTracking: false, recordPosition: async () => false }
@@ -107,6 +118,87 @@ export default function SceneView({
             onUAVPositionUpdate(position, deviceId)
         }
     }, [onUAVPositionUpdate])
+
+    // Generate sparse ISS map from UAV tracking data
+    const handleGenerateSparseISSMap = useCallback(async () => {
+        if (!sceneName || !droneTracking) {
+            console.warn('場景名稱或無人機軌跡服務不可用')
+            return
+        }
+
+        setSparseMapGenerating(true)
+        setSparseMapError(null)
+        setSparseMapUrl(null)
+
+        try {
+            console.log('開始生成稀疏ISS地圖...')
+            
+            // 獲取UAV軌跡點
+            const trackingPoints = await getDroneTrackingPoints(sceneName)
+            
+            if (trackingPoints.length === 0) {
+                throw new Error('沒有UAV軌跡數據，請先進行UAV掃描或手動控制')
+            }
+
+            console.log(`找到 ${trackingPoints.length} 個UAV軌跡點，正在生成稀疏ISS地圖...`)
+
+            // 調用後端API生成稀疏ISS地圖
+            const result = await generateSparseISSMap({
+                scene: sceneName,
+                uav_points: trackingPoints,
+                cell_size: 1.0,
+                map_width: 512,
+                map_height: 512,
+                altitude: 40.0,
+                sparse_noise_std_db: 0.5,
+                map_type: 'iss'
+            })
+
+            if (result.success && result.sparse_map_url) {
+                setSparseMapUrl(result.sparse_map_url)
+                console.log('稀疏ISS地圖生成成功:', result.sparse_map_url)
+            } else {
+                throw new Error(result.error || '稀疏ISS地圖生成失敗')
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : '未知錯誤'
+            setSparseMapError(errorMessage)
+            console.error('稀疏ISS地圖生成失敗:', error)
+        } finally {
+            setSparseMapGenerating(false)
+        }
+    }, [sceneName, droneTracking])
+
+    // Update UAV scan context when scan data changes
+    useEffect(() => {
+        if (sparseScan.data && sceneName) {
+            const scanPoints = sparseScan.exportScanPointsForISSMap()
+            const scanCount = sparseScan.getScanPointsCount()
+            
+            console.log('更新 UAV 掃描 Context 數據:', {
+                scanPointsCount: scanPoints.length,
+                totalScanCount: scanCount,
+                isScanning: sparseScan.isPlaying,
+                progress: sparseScan.progress,
+                sceneName
+            })
+            
+            updateScanData({
+                scanPoints,
+                scanCount,
+                isScanning: sparseScan.isPlaying,
+                progress: sparseScan.progress,
+                sceneName
+            })
+        }
+    }, [
+        sparseScan.data,
+        sparseScan.progress,
+        sparseScan.isPlaying,
+        sparseScan.traversedPath, // 添加這個依賴以確保路徑更新時觸發
+        sceneName,
+        updateScanData
+    ])
 
     // Monitor RX device position changes for tracking with polling
     useEffect(() => {
@@ -423,6 +515,20 @@ export default function SceneView({
                             >
                                 Debug網格
                             </button>
+                            
+                            {/* 生成稀疏ISS地圖按鈕 */}
+                            <button
+                                onClick={handleGenerateSparseISSMap}
+                                disabled={sparseMapGenerating || !droneTracking?.isTracking}
+                                className="control-btn sparse-map-btn"
+                                style={{ 
+                                    backgroundColor: sparseMapGenerating ? '#666' : '#ff6b35',
+                                    opacity: !droneTracking?.isTracking ? 0.6 : 1
+                                }}
+                                title={!droneTracking?.isTracking ? '請先啟用UAV軌跡追蹤' : '根據UAV軌跡生成稀疏ISS地圖'}
+                            >
+                                {sparseMapGenerating ? '生成中...' : '🗺️ 生成稀疏ISS地圖'}
+                            </button>
                         </div>
                         
                         {/* Progress */}
@@ -514,7 +620,7 @@ export default function SceneView({
                                         
                                         switch(device.role) {
                                             case 'desired':
-                                                marker = '📡';
+                                                marker = '🚁';
                                                 className += ' tx-marker';
                                                 break;
                                             case 'jammer':
@@ -559,6 +665,101 @@ export default function SceneView({
                                 )}
                             </div>
                         )}
+                        
+                        {/* Real-time UAV Position and ISS Value Display */}
+                        <div className="realtime-uav-info">
+                            <h5>實時UAV資訊 {sparseScan.isGeneratingISS && <span className="generating">(計算中...)</span>}</h5>
+                            <div className="uav-data-container">
+                                {sparseScan.data && sparseScan.data.points[sparseScan.currentIdx] && (
+                                    <div className="uav-position">
+                                        <div className="data-label">UAV位置:</div>
+                                        <div className="data-value">
+                                            ({sparseScan.data.points[sparseScan.currentIdx].x_m.toFixed(1)}, {sparseScan.data.points[sparseScan.currentIdx].y_m.toFixed(1)}, 30.0) 米
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="iss-value">
+                                    <div className="data-label">實時ISS數值:</div>
+                                    <div className="data-value iss-number">
+                                        {sparseScan.isGeneratingISS ? (
+                                            <span className="calculating">計算中...</span>
+                                        ) : sparseScan.realTimeISSValue !== null ? (
+                                            `${sparseScan.realTimeISSValue.toFixed(2)} dBm`
+                                        ) : (
+                                            '等待計算'
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="realtime-info">
+                                <small>
+                                    🚁 UAV在每個位置停留，等待完整ISS計算完成<br/>
+                                    📊 顯示該位置作為接收器的實時干擾信號強度
+                                </small>
+                            </div>
+                        </div>
+                        
+                        {/* 稀疏ISS地圖結果顯示 */}
+                        <div className="sparse-iss-map-result">
+                            {sparseMapError && (
+                                <div className="error-message" style={{ 
+                                    color: '#ff6b6b', 
+                                    background: 'rgba(255, 107, 107, 0.1)', 
+                                    padding: '10px', 
+                                    borderRadius: '4px',
+                                    marginTop: '10px' 
+                                }}>
+                                    ❌ {sparseMapError}
+                                </div>
+                            )}
+                            
+                            {sparseMapUrl && (
+                                <div className="sparse-map-display" style={{ marginTop: '15px' }}>
+                                    <h5>🗺️ 基於UAV軌跡的稀疏ISS地圖</h5>
+                                    <div style={{ 
+                                        border: '2px solid #ff6b35', 
+                                        borderRadius: '8px', 
+                                        overflow: 'hidden',
+                                        background: '#000'
+                                    }}>
+                                        <img 
+                                            src={sparseMapUrl} 
+                                            alt="Sparse ISS Map" 
+                                            style={{ 
+                                                width: '100%', 
+                                                maxWidth: '400px', 
+                                                height: 'auto',
+                                                display: 'block'
+                                            }}
+                                            onLoad={() => console.log('稀疏ISS地圖載入完成')}
+                                            onError={() => setSparseMapError('地圖圖像載入失敗')}
+                                        />
+                                    </div>
+                                    <div style={{ 
+                                        fontSize: '12px', 
+                                        color: '#ccc', 
+                                        marginTop: '5px',
+                                        textAlign: 'center' 
+                                    }}>
+                                        基於實際UAV飛行軌跡的稀疏干擾信號強度地圖
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {!droneTracking?.isTracking && !sparseMapGenerating && (
+                                <div className="tracking-hint" style={{ 
+                                    background: 'rgba(255, 193, 7, 0.1)', 
+                                    border: '1px solid #ffc107',
+                                    color: '#ffc107', 
+                                    padding: '10px', 
+                                    borderRadius: '4px',
+                                    marginTop: '10px',
+                                    fontSize: '13px'
+                                }}>
+                                    💡 提示：啟用UAV軌跡追蹤並進行飛行操作，然後點擊"生成稀疏ISS地圖"按鈕來創建基於實際軌跡的干擾地圖
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>
@@ -834,6 +1035,75 @@ styleSheet.innerHTML = `
 .iss-canvas-container {
     border-top: 1px solid #555;
     padding-top: 8px;
+}
+
+.realtime-uav-info {
+    border-top: 1px solid #555;
+    padding-top: 8px;
+    margin-top: 10px;
+}
+
+.realtime-uav-info h5 {
+    margin: 0 0 8px 0;
+    font-size: 12px;
+    color: #0088ff;
+}
+
+.uav-data-container {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+    padding: 8px;
+    margin-bottom: 6px;
+}
+
+.uav-position, .iss-value {
+    margin-bottom: 6px;
+}
+
+.uav-position:last-child, .iss-value:last-child {
+    margin-bottom: 0;
+}
+
+.data-label {
+    font-size: 10px;
+    color: #aaa;
+    margin-bottom: 2px;
+}
+
+.data-value {
+    font-size: 11px;
+    color: #fff;
+    font-weight: bold;
+}
+
+.iss-number {
+    color: #0088ff;
+    font-size: 13px;
+}
+
+.calculating {
+    color: #ffa500;
+    animation: pulse 1.5s infinite ease-in-out;
+}
+
+.generating {
+    color: #ffa500;
+    animation: pulse 1s infinite ease-in-out;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1.0; }
+}
+
+.realtime-info {
+    margin-top: 5px;
+    padding: 4px 6px;
+    background: rgba(0, 136, 255, 0.1);
+    border-radius: 3px;
+    font-size: 10px;
+    color: #ccc;
+    text-align: center;
 }
 
 .current-position-info {

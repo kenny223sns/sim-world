@@ -43,10 +43,14 @@ export const ApiRoutes = {
     // 更新為實際存在的API路徑
     getCFRMap: `${API_BASE_URL}/simulations/cfr-plot`,
     getSINRMap: `${API_BASE_URL}/simulations/sinr-map`,
+    getRadioMap: `${API_BASE_URL}/simulations/radio-map`,
     getDopplerMap: `${API_BASE_URL}/simulations/doppler-plots`,
     getChannelResponsePlots: `${API_BASE_URL}/simulations/channel-response`,
     getSceneImage: `${API_BASE_URL}/simulations/scene-image`,
     getISSMap: `${API_BASE_URL}/simulations/iss-map`,
+    getTSSMap: `${API_BASE_URL}/simulations/tss-map`, // TSS 地圖API
+    getUAVSparseMap: `${API_BASE_URL}/simulations/uav-sparse-map`, // UAV Sparse 地圖API
+    getSparseISSMap: `${API_BASE_URL}/simulations/iss-map-sparse`, // 新增稀疏ISS地圖API
     getResults: (id: string) => `${API_BASE_URL}/simulations/${id}/results`,
     // 模型相關API路徑仍在sionna命名空間下
     getModel: (modelName: string) => `${API_BASE_URL}/sionna/models/${modelName}`,
