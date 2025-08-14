@@ -7,6 +7,7 @@ import { useSparseUAVScan } from '../../hooks/useSparseUAVScan'
 import { useUAVScanContext } from '../../contexts/UAVScanContext'
 import SparseISSCanvas from '../scenes/SparseISSCanvas'
 import RadioMapViewer from './RadioMapViewer'
+import { CFARPeakGPS } from '../../services/sparseScanApi'
 
 // 干擾信號檢測地圖顯示組件
 const ISSViewer: React.FC<ViewerProps> = ({
@@ -38,6 +39,10 @@ const ISSViewer: React.FC<ViewerProps> = ({
     const [showSparseSection, setShowSparseSection] = useState(false)
     const [showRadioMapViewer, setShowRadioMapViewer] = useState(false)
     const [showSparseVisualization, setShowSparseVisualization] = useState(false)
+    
+    // CFAR峰值GPS顯示狀態
+    const [cfarPeaksGPS, setCfarPeaksGPS] = useState<CFARPeakGPS[]>([])
+    const [cfarLoading, setCfarLoading] = useState(false)
 
     // 使用稀疏掃描hook
     const sparseScan = useSparseUAVScan({
@@ -69,8 +74,31 @@ const ISSViewer: React.FC<ViewerProps> = ({
         device.role === 'receiver' && device.active
     )
 
+    // 獲取CFAR峰值GPS數據
+    const loadCFARPeaksGPS = useCallback(async () => {
+        if (currentMapType !== 'iss') return // 只有ISS地圖才有CFAR峰值
+        
+        setCfarLoading(true)
+        try {
+            // 使用sparse-scan API獲取CFAR峰值GPS數據
+            const response = await fetch(`${ApiRoutes.interference.sparseScan}?scene=${currentScene}`)
+            if (response.ok) {
+                const data = await response.json()
+                if (data.success && data.cfar_peaks_gps) {
+                    setCfarPeaksGPS(data.cfar_peaks_gps)
+                    console.log(`獲取到 ${data.cfar_peaks_gps.length} 個CFAR峰值GPS位置`)
+                }
+            }
+        } catch (error) {
+            console.error('獲取CFAR峰值GPS數據失敗:', error)
+        } finally {
+            setCfarLoading(false)
+        }
+    }, [currentMapType, currentScene])
+
 
     const tssImageUrlRef = useRef<string | null>(null)
+    const uavSparseImageUrlRef = useRef<string | null>(null)
     
     useEffect(() => {
         imageUrlRef.current = imageUrl
@@ -79,6 +107,10 @@ const ISSViewer: React.FC<ViewerProps> = ({
     useEffect(() => {
         tssImageUrlRef.current = tssImageUrl
     }, [tssImageUrl])
+
+    useEffect(() => {
+        uavSparseImageUrlRef.current = uavSparseImageUrl
+    }, [uavSparseImageUrl])
 
     const loadMaps = useCallback(() => {
         setIsLoading(true)
@@ -120,7 +152,14 @@ const ISSViewer: React.FC<ViewerProps> = ({
             console.log(`地圖載入: 使用 Jammer ${index + 1} 位置 (${jammer.position_x}, ${jammer.position_y}, ${jammer.position_z})`)
         })
 
-        // 先發起 ISS 地圖請求（會同時生成 ISS 和 TSS 地圖）
+        // 添加 UAV 掃描點數據（如果有的話）
+        if (hasScanData() && scanData && scanData.scanPoints && scanData.scanPoints.length > 0) {
+            const uavPointsStr = scanData.scanPoints.map(point => `${point.x},${point.y}`).join(';')
+            params.append('uav_points', uavPointsStr)
+            console.log(`地圖載入: 使用 ${scanData.scanPoints.length} 個 UAV 掃描點`)
+        }
+
+        // 先發起 ISS 地圖請求（會同時生成 ISS、TSS 和 UAV Sparse 地圖）
         const issUrl = `${ApiRoutes.simulations.getISSMap}?${params.toString()}`
         
         console.log('ISS Map API URL:', issUrl)
@@ -146,6 +185,9 @@ const ISSViewer: React.FC<ViewerProps> = ({
             // 創建新的 ISS URL
             const newIssUrl = URL.createObjectURL(issBlob)
             setImageUrl(newIssUrl)
+            
+            // ISS 地圖載入成功後，獲取CFAR峰值GPS數據
+            loadCFARPeaksGPS()
             
             // ISS 地圖載入成功後，再請求 TSS 地圖（此時應該已經生成）
             const tssUrl = `${ApiRoutes.simulations.getTSSMap}?t=${Date.now()}`
@@ -175,8 +217,48 @@ const ISSViewer: React.FC<ViewerProps> = ({
             setTssImageUrl(newTssUrl)
             
             setIsLoading(false)
-            
             updateTimestamp()
+            
+            // TSS 地圖載入成功後，檢查是否有 UAV 點資料來載入 UAV Sparse 地圖
+            if (hasScanData() && scanData && scanData.scanPoints && scanData.scanPoints.length > 0) {
+                console.log('檢測到 UAV 掃描資料，開始載入 UAV Sparse 地圖')
+                const uavSparseUrl = `${ApiRoutes.simulations.getUAVSparseMap}?t=${Date.now()}`
+                console.log('UAV Sparse Map API URL:', uavSparseUrl)
+                
+                fetch(uavSparseUrl)
+                    .then(uavSparseResponse => {
+                        if (!uavSparseResponse.ok) {
+                            throw new Error(`UAV Sparse 地圖 API 請求失敗: ${uavSparseResponse.status} ${uavSparseResponse.statusText}`)
+                        }
+                        return uavSparseResponse.blob()
+                    })
+                    .then(uavSparseBlob => {
+                        // 檢查是否收到了有效的 UAV Sparse 圖片數據
+                        if (uavSparseBlob.size === 0) {
+                            throw new Error('接收到空的 UAV Sparse 圖像數據')
+                        }
+
+                        // 清理舊的 UAV Sparse URL
+                        if (uavSparseImageUrlRef.current) {
+                            URL.revokeObjectURL(uavSparseImageUrlRef.current)
+                        }
+                        
+                        // 創建新的 UAV Sparse URL
+                        const newUavSparseUrl = URL.createObjectURL(uavSparseBlob)
+                        setUavSparseImageUrl(newUavSparseUrl)
+                        console.log('UAV Sparse 地圖載入成功')
+                        
+                        // 自動切換到 UAV Sparse 地圖顯示
+                        setCurrentMapType('uav-sparse')
+                        console.log('自動切換到 UAV Sparse 地圖顯示')
+                    })
+                    .catch(uavSparseErr => {
+                        console.warn('UAV Sparse 地圖載入失敗:', uavSparseErr)
+                        // UAV sparse 地圖載入失敗不影響主要功能
+                    })
+            } else {
+                console.log('沒有 UAV 掃描資料，跳過 UAV Sparse 地圖載入')
+            }
         })
             .catch((err) => {
                 console.error('載入干擾信號檢測地圖失敗:', err)
@@ -203,6 +285,13 @@ const ISSViewer: React.FC<ViewerProps> = ({
         reportIsLoadingToNavbar(isLoading)
     }, [isLoading, reportIsLoadingToNavbar])
 
+    // 當切換到ISS地圖時，獲取CFAR峰值GPS數據
+    useEffect(() => {
+        if (currentMapType === 'iss' && imageUrl) {
+            loadCFARPeaksGPS()
+        }
+    }, [currentMapType, imageUrl, loadCFARPeaksGPS])
+
     useEffect(() => {
         loadMaps()
         return () => {
@@ -211,6 +300,9 @@ const ISSViewer: React.FC<ViewerProps> = ({
             }
             if (tssImageUrlRef.current) {
                 URL.revokeObjectURL(tssImageUrlRef.current)
+            }
+            if (uavSparseImageUrlRef.current) {
+                URL.revokeObjectURL(uavSparseImageUrlRef.current)
             }
         }
     }, [loadMaps])
@@ -516,9 +608,31 @@ const ISSViewer: React.FC<ViewerProps> = ({
                         >
                             TSS 地圖 (總信號強度)
                         </button>
+                        <button
+                            onClick={() => setCurrentMapType('uav-sparse')}
+                            style={{
+                                padding: '8px 15px',
+                                background: currentMapType === 'uav-sparse' ? '#228b22' : 'rgba(255, 255, 255, 0.2)',
+                                color: 'white',
+                                border: currentMapType === 'uav-sparse' ? '2px solid #32cd32' : '2px solid transparent',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '14px',
+                                fontWeight: currentMapType === 'uav-sparse' ? 'bold' : 'normal',
+                                opacity: uavSparseImageUrl ? 1 : 0.5
+                            }}
+                            disabled={!uavSparseImageUrl}
+                        >
+                            UAV Sparse 地圖
+                        </button>
                     </div>
                     <div style={{ fontSize: '12px', color: '#aaa', marginTop: '8px' }}>
-                        💡 ISS 地圖包含 2D-CFAR 檢測峰值，TSS 地圖顯示總信號強度分佈
+                        💡 ISS 地圖包含 2D-CFAR 檢測峰值，TSS 地圖顯示總信號強度分佈，UAV Sparse 地圖顯示 UAV 軌跡稀疏採樣點
+                        {!uavSparseImageUrl && (
+                            <div style={{ marginTop: '4px', color: '#ff9800' }}>
+                                ℹ️ UAV Sparse 地圖需要先進行 UAV 稀疏掃描才能顯示
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -546,16 +660,111 @@ const ISSViewer: React.FC<ViewerProps> = ({
             )}
             {/* 根據選擇的地圖類型顯示對應的圖片 */}
             {currentMapType === 'iss' && imageUrl && (
-                <img
-                    src={imageUrl}
-                    alt="ISS Map - Interference Signal Strength with 2D-CFAR Detection"
-                    className="view-image iss-view-image"
-                />
+                <div>
+                    <img
+                        src={imageUrl}
+                        alt="ISS Map - Interference Signal Strength with 2D-CFAR Detection"
+                        className="view-image iss-view-image"
+                    />
+                    
+                    {/* CFAR峰值GPS位置顯示 */}
+                    {cfarPeaksGPS.length > 0 && (
+                        <div style={{
+                            marginTop: '15px',
+                            padding: '15px',
+                            backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                            borderLeft: '4px solid #007bff',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                            color: '#ffffff'
+                        }}>
+                            <div style={{ fontWeight: 'bold', marginBottom: '10px', display: 'flex', alignItems: 'center' }}>
+                                <span>🎯 CFAR 峰值 GPS 位置</span>
+                                {cfarLoading && <span style={{ marginLeft: '10px', fontSize: '12px', color: '#ffa500' }}>載入中...</span>}
+                                <span style={{ marginLeft: '10px', fontSize: '12px', color: '#aaa' }}>
+                                    ({cfarPeaksGPS.length} 個檢測點)
+                                </span>
+                            </div>
+                            
+                            <div style={{ 
+                                maxHeight: '200px', 
+                                overflowY: 'auto', 
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                borderRadius: '4px',
+                                padding: '8px'
+                            }}>
+                                {cfarPeaksGPS.map((peak, index) => (
+                                    <div key={peak.peak_id} style={{
+                                        marginBottom: '8px',
+                                        padding: '8px',
+                                        backgroundColor: 'rgba(255,255,255,0.05)',
+                                        borderRadius: '4px',
+                                        fontSize: '12px'
+                                    }}>
+                                        <div style={{ fontWeight: 'bold', color: '#4fc3f7' }}>
+                                            峰值 #{peak.peak_id}
+                                        </div>
+                                        <div style={{ marginTop: '4px' }}>
+                                            <span style={{ color: '#81c784' }}>GPS:</span> {peak.gps_coords.latitude.toFixed(6)}°N, {peak.gps_coords.longitude.toFixed(6)}°E
+                                        </div>
+                                        <div style={{ marginTop: '2px' }}>
+                                            <span style={{ color: '#ffb74d' }}>前端座標:</span> ({peak.frontend_coords.x.toFixed(1)}, {peak.frontend_coords.y.toFixed(1)})
+                                        </div>
+                                        <div style={{ marginTop: '2px' }}>
+                                            <span style={{ color: '#f48fb1' }}>ISS強度:</span> {peak.iss_strength_dbm.toFixed(2)} dBm
+                                        </div>
+                                        <div style={{ marginTop: '4px' }}>
+                                            <a 
+                                                href={`https://www.google.com/maps?q=${peak.gps_coords.latitude},${peak.gps_coords.longitude}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                style={{ 
+                                                    color: '#64b5f6', 
+                                                    textDecoration: 'none',
+                                                    fontSize: '11px'
+                                                }}
+                                                onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                                                onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                                            >
+                                                📍 在 Google Maps 中查看
+                                            </a>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            
+                            <div style={{ fontSize: '11px', color: '#aaa', marginTop: '8px' }}>
+                                💡 點擊 GPS 連結可在 Google Maps 中查看確切位置。座標基於 Potou 場景轉換。
+                            </div>
+                        </div>
+                    )}
+                    
+                    {currentMapType === 'iss' && !cfarLoading && cfarPeaksGPS.length === 0 && imageUrl && (
+                        <div style={{
+                            marginTop: '15px',
+                            padding: '10px',
+                            backgroundColor: 'rgba(255, 193, 7, 0.1)',
+                            borderLeft: '4px solid #ffc107',
+                            borderRadius: '4px',
+                            fontSize: '13px',
+                            color: '#ffc107'
+                        }}>
+                            ℹ️ 當前 ISS 地圖未檢測到 CFAR 峰值，可能干擾源較弱或不在檢測範圍內
+                        </div>
+                    )}
+                </div>
             )}
             {currentMapType === 'tss' && tssImageUrl && (
                 <img
                     src={tssImageUrl}
                     alt="TSS Map - Total Signal Strength"
+                    className="view-image iss-view-image"
+                />
+            )}
+            {currentMapType === 'uav-sparse' && uavSparseImageUrl && (
+                <img
+                    src={uavSparseImageUrl}
+                    alt="UAV Sparse Map - UAV Trajectory TSS Sampling"
                     className="view-image iss-view-image"
                 />
             )}

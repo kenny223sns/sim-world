@@ -554,7 +554,118 @@ export default function SceneView({
                             )}
                         </div>
                         
-                        {/* ISS Canvas - Hidden per user request */}
+                        {/* ISS Canvas - Hidden per user request
+                        {sparseScan.data && (
+                            <div className="iss-canvas-container">
+                                <h5>ISS視覺化 (當前位置: {sparseScan.currentIdx + 1}/{sparseScan.data.total_points})</h5>
+                                <div style={{ position: 'relative', display: 'inline-block' }}>
+                                    <SparseISSCanvas
+                                        width={300}
+                                        height={300}
+                                        gridW={sparseScan.data.width}
+                                        gridH={sparseScan.data.height}
+                                        samples={sparseScan.samples}
+                                        vmin={-2}
+                                        vmax={5}
+                                        colormap="viridis"
+                                    />
+                                    {/* UAV位置標記 - 使用統一座標映射 */}
+                                    {sparseScan.data.points[sparseScan.currentIdx] && (
+                                        (() => {
+                                            const currentPoint = sparseScan.data.points[sparseScan.currentIdx];
+                                            const [leftPct, topPct] = worldToCanvasPct(
+                                                currentPoint.x_m, 
+                                                currentPoint.y_m, 
+                                                sparseScan.data
+                                            );
+                                            
+                                            // Debug輸出
+                                            if (sparseScan.currentIdx % 20 === 0) {
+                                                const debugInfo = debugCoordTransform(
+                                                    [currentPoint.x_m, currentPoint.y_m], 
+                                                    sparseScan.data
+                                                );
+                                                console.log('UAV座標轉換debug:', debugInfo);
+                                            }
+                                            
+                                            return (
+                                                <div 
+                                                    className="uav-marker"
+                                                    style={{
+                                                        position: 'absolute',
+                                                        left: `${leftPct}%`,
+                                                        top: `${topPct}%`,
+                                                        transform: 'translate(-50%, -50%)',
+                                                        pointerEvents: 'none'
+                                                    }}
+                                                >
+                                                    🚁
+                                                </div>
+                                            );
+                                        })()
+                                    )}
+                                    
+                                    {/* 設備位置標記 - TX和Jammer */}
+                                    {devices.map((device, index) => {
+                                        if (!device.position_x || !device.position_y || !sparseScan.data) return null;
+                                        
+                                        const [leftPct, topPct] = worldToCanvasPct(
+                                            device.position_x,
+                                            device.position_y,
+                                            sparseScan.data
+                                        );
+                                        
+                                        let marker = '';
+                                        let className = 'device-marker';
+                                        
+                                        switch(device.role) {
+                                            case 'desired':
+                                                marker = '🚁';
+                                                className += ' tx-marker';
+                                                break;
+                                            case 'jammer':
+                                                marker = '⚡';
+                                                className += ' jammer-marker';
+                                                break;
+                                            case 'receiver':
+                                                // 接收器已經有UAV標記了，跳過
+                                                return null;
+                                            default:
+                                                return null;
+                                        }
+                                        
+                                        return (
+                                            <div 
+                                                key={device.id || index}
+                                                className={className}
+                                                style={{
+                                                    position: 'absolute',
+                                                    left: `${leftPct}%`,
+                                                    top: `${topPct}%`,
+                                                    transform: 'translate(-50%, -50%)',
+                                                    pointerEvents: 'none',
+                                                    fontSize: '14px',
+                                                    zIndex: 5
+                                                }}
+                                                title={`${device.name}: (${device.position_x}, ${device.position_y})`}
+                                            >
+                                                {marker}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                
+                                {sparseScan.data.points[sparseScan.currentIdx] && (
+                                    <div className="current-position-info">
+                                        <small>
+                                            位置: ({sparseScan.data.points[sparseScan.currentIdx].x_m.toFixed(1)}, {sparseScan.data.points[sparseScan.currentIdx].y_m.toFixed(1)})m<br/>
+                                            ISS: {sparseScan.data.points[sparseScan.currentIdx].iss_dbm.toFixed(2)} dBm
+                                        </small>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        */
                         
                         {/* Real-time UAV Position and ISS Value Display */}
                         <div className="realtime-uav-info">

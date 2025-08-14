@@ -82,6 +82,12 @@ export const ApiRoutes = {
     getScenes: `${API_BASE_URL}/drone-tracking/scenes`,
   },
   
+  // 干擾檢測API
+  interference: {
+    base: `${API_BASE_URL}/interference`,
+    sparseScan: `${API_BASE_URL}/interference/sparse-scan`,
+  },
+  
   // 臨時的 sionna 命名空間相關路由 (已不存在於後端，前端保留向後兼容)
   sionna: {
     getModel: (modelName: string) => `${API_BASE_URL}/sionna/models/${modelName}`,
