@@ -217,6 +217,32 @@ const DeviceItem: React.FC<DeviceItemProps> = ({
                         </tbody>
                     </table>
                 )}
+                
+                {device.role === 'desired' && (
+                    <table className="device-table model-table">
+                        <thead>
+                            <tr>
+                                <th>3D模型類型</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>
+                                    <select
+                                        value={device.model_type || 'tower'}
+                                        onChange={(e) =>
+                                            onDeviceChange(device.id, 'model_type', e.target.value)
+                                        }
+                                        className="device-model-select"
+                                    >
+                                        <option value="tower">基站塔 (Tower)</option>
+                                        <option value="iphone">手機 (iPhone)</option>
+                                    </select>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                )}
             </div>
         </div>
     )

@@ -649,4 +649,27 @@
     width: auto; 
     height: auto; 
     object-fit: contain; 
+}
+
+/* ISS 地圖圖片樣式 - 針對干擾檢測地圖優化 */
+.iss-view-image {
+    max-height: calc(55vh - 80px); /* 減少高度限制 */
+    max-width: 80%; /* 減少寬度限制 */
+    width: auto; 
+    height: auto; 
+    object-fit: contain;
+    border-radius: 4px;
+    margin: 10px 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); /* 添加陰影效果 */
+    
+    /* 確保圖片在不同螢幕尺寸下都能良好顯示 */
+    @media (max-width: 1200px) {
+        max-height: calc(50vh - 80px);
+        max-width: 90%;
+    }
+    
+    @media (max-width: 768px) {
+        max-height: calc(60vh - 80px);
+        max-width: 100%;
+    }
 } 

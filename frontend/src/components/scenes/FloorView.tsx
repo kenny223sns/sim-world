@@ -92,6 +92,7 @@ const SceneViewer: React.FC<SceneViewerProps> = React.memo(
                 power_dbm: backendDevice.power_dbm || 0,
                 active: backendDevice.active,
                 role: backendDevice.role,
+                model_type: backendDevice.model_type || 'tower', // 默認為tower
             }),
             []
         )

@@ -210,7 +210,7 @@ async def get_channel_response(
 @router.get("/iss-map", response_description="干擾信號檢測地圖")
 async def get_iss_map(
     session: AsyncSession = Depends(get_session),
-    scene: str = Query("nycu", description="場景名稱 (nycu, lotus)"),
+    scene: str = Query("potou", description="場景名稱 (potou, poto, nycu, lotus)"),
     tx_x: Optional[float] = Query(None, description="TX位置X座標 (米)"),
     tx_y: Optional[float] = Query(None, description="TX位置Y座標 (米)"),
     tx_z: Optional[float] = Query(None, description="TX位置Z座標 (米)"),
@@ -232,9 +232,10 @@ async def get_iss_map(
     num_random_samples: int = Query(0, ge=0, le=100, description="隨機取樣點數量 (若無UAV點)"),
     sparse_noise_std_db: float = Query(0.0, ge=0.0, le=10.0, description="稀疏量測雜訊標準差 (dB)"),
     sparse_first_then_full: bool = Query(False, description="先顯示稀疏取樣再顯示完整地圖"),
+    return_json: bool = Query(False, description="返回包含CFAR峰值的JSON數據而不是圖片"),
 ):
     """產生並回傳干擾信號檢測地圖 (使用 2D-CFAR 技術)"""
-    logger.info(f"--- API Request: /iss-map?scene={scene}, force_refresh={force_refresh}, center_on={center_on} ---")
+    logger.info(f"--- API Request: /iss-map?scene={scene}, force_refresh={force_refresh}, center_on={center_on}, return_json={return_json} ---")
     if tx_x is not None and tx_y is not None:
         logger.info(f"TX位置參數: ({tx_x}, {tx_y}, {tx_z})")
     if rx_x is not None and rx_y is not None:
@@ -300,7 +301,11 @@ async def get_iss_map(
             if map_width * map_height > 16_000_000:  # 限制在1600萬像素以內 (約4000x4000)
                 raise HTTPException(status_code=400, detail="地圖尺寸過大，請限制在1600萬像素以內")
                 
-        success = await sionna_service.generate_iss_map(
+        # 直接調用全域generate_iss_map函數以獲取峰值數據
+        from app.domains.simulation.services.sionna_service import generate_iss_map
+        import time
+        
+        result = await generate_iss_map(
             session=session, 
             output_path=str(ISS_MAP_IMAGE_PATH),
             scene_name=scene,
@@ -320,13 +325,137 @@ async def get_iss_map(
             sparse_first_then_full=sparse_first_then_full,
         )
 
-        if not success:
-            raise HTTPException(status_code=500, detail="產生干擾信號檢測地圖失敗")
+        if not result["success"]:
+            error_msg = result.get("error", "產生干擾信號檢測地圖失敗")
+            raise HTTPException(status_code=500, detail=error_msg)
 
-        return create_image_response(str(ISS_MAP_IMAGE_PATH), "iss_map.png")
+        # 根據return_json參數決定回應格式
+        if return_json:
+            # 返回包含CFAR峰值的JSON數據
+            return {
+                "success": True,
+                "scene": scene,
+                "cfar_peaks_gps": result["cfar_peaks_gps"],
+                "total_peaks": result["total_peaks"],
+                "image_url": f"/static/images/iss_map.png?t={int(time.time())}"
+            }
+        else:
+            # 返回圖片（原有行為）
+            return create_image_response(str(ISS_MAP_IMAGE_PATH), "iss_map.png")
     except Exception as e:
         logger.error(f"生成干擾信號檢測地圖時出錯: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"生成干擾信號檢測地圖時出錯: {str(e)}")
+
+
+@router.get("/iss-map-cfar-peaks", response_description="ISS地圖CFAR峰值GPS數據")
+async def get_iss_map_cfar_peaks(
+    session: AsyncSession = Depends(get_session),
+    scene: str = Query("potou", description="場景名稱 (potou, poto, nycu, lotus)"),
+    force_refresh: bool = Query(False, description="強制重新生成ISS地圖以獲取最新峰值")
+):
+    """獲取ISS地圖的CFAR峰值GPS座標"""
+    try:
+        from app.domains.simulation.services.sionna_service import SionnaSimulationService
+        from app.api.v1.interference.routes_sparse_scan import frontend_coords_to_gps
+        
+        # 獲取SionnaSimulationService實例
+        sionna_service = SionnaSimulationService()
+        
+        cfar_peaks_gps = []
+        
+        # 如果需要強制刷新或沒有快取數據，重新生成ISS地圖
+        should_regenerate = force_refresh
+        
+        if not should_regenerate:
+            # 檢查是否有有效的快取數據
+            from app.domains.simulation.services.sionna_service import generate_iss_map
+            if hasattr(generate_iss_map, '_iss_cache') and generate_iss_map._iss_cache:
+                # 有快取數據，但檢查是否為當前場景相關
+                found_valid_cache = False
+                for cache_key, cached_data in generate_iss_map._iss_cache.items():
+                    if 'peak_locations_gps' in cached_data and cached_data['peak_locations_gps']:
+                        found_valid_cache = True
+                        break
+                
+                if not found_valid_cache:
+                    should_regenerate = True
+                    logger.info("快取中沒有找到有效的峰值數據，將重新生成ISS地圖")
+            else:
+                should_regenerate = True
+                logger.info("沒有ISS地圖快取數據，將重新生成")
+        
+        if should_regenerate:
+            # 重新生成ISS地圖以確保獲取最新的峰值數據
+            logger.info(f"重新生成ISS地圖以獲取最新CFAR峰值，場景: {scene}")
+            from app.core.config import ISS_MAP_IMAGE_PATH
+            
+            # 使用默認參數重新生成ISS地圖
+            success = await sionna_service.generate_iss_map(
+                session=session,
+                output_path=str(ISS_MAP_IMAGE_PATH),
+                scene_name=scene
+            )
+            
+            if not success:
+                logger.warning("重新生成ISS地圖失敗，嘗試使用現有快取數據")
+        
+        # 從快取中獲取峰值數據並轉換GPS座標
+        from app.domains.simulation.services.sionna_service import generate_iss_map
+        if hasattr(generate_iss_map, '_iss_cache') and generate_iss_map._iss_cache:
+            # 找到最新的快取條目（基於時間戳）
+            latest_cache_data = None
+            latest_timestamp = 0
+            latest_cache_key = None
+            
+            for cache_key, cached_data in generate_iss_map._iss_cache.items():
+                if 'peak_locations_gps' in cached_data and cached_data['peak_locations_gps']:
+                    timestamp = cached_data.get('timestamp', 0)
+                    if timestamp > latest_timestamp:
+                        latest_timestamp = timestamp
+                        latest_cache_data = cached_data
+                        latest_cache_key = cache_key
+            
+            if latest_cache_data:
+                # 從最新快取的峰值數據中獲取前端座標，然後根據當前場景重新計算GPS座標
+                cached_peaks = latest_cache_data['peak_locations_gps']
+                logger.info(f"從最新ISS地圖快取獲取到 {len(cached_peaks)} 個CFAR峰值 (時間戳: {latest_timestamp:.0f}, key: {latest_cache_key[:16]}...)，重新計算GPS位置使用場景: {scene}")
+                
+                for peak_data in cached_peaks:
+                    # 獲取前端座標
+                    frontend_coords = peak_data.get('frontend_coords', {})
+                    x_frontend = frontend_coords.get('x', 0)
+                    y_frontend = frontend_coords.get('y', 0)
+                    
+                    # 使用當前場景參數重新計算GPS座標
+                    gps_coord = frontend_coords_to_gps(x_frontend, y_frontend, 0.0, scene)
+                    
+                    # 構建新的峰值數據，保留其他信息但更新GPS座標
+                    updated_peak = peak_data.copy()
+                    updated_peak['gps_coords'] = {
+                        "latitude": gps_coord.latitude,
+                        "longitude": gps_coord.longitude,
+                        "altitude": gps_coord.altitude
+                    }
+                    cfar_peaks_gps.append(updated_peak)
+            else:
+                logger.warning("快取中沒有找到有效的峰值數據")
+        
+        return {
+            "success": True,
+            "scene": scene,
+            "cfar_peaks_gps": cfar_peaks_gps,
+            "total_peaks": len(cfar_peaks_gps)
+        }
+        
+    except Exception as e:
+        logger.error(f"獲取CFAR峰值GPS數據時出錯: {e}", exc_info=True)
+        return {
+            "success": False,
+            "scene": scene,
+            "cfar_peaks_gps": [],
+            "total_peaks": 0,
+            "error": str(e)
+        }
 
 
 @router.get("/tss-map")

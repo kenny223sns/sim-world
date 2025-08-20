@@ -186,6 +186,8 @@ def get_scene_xml_file_path(scene_name: str) -> str:
         "lotus": "Lotus",
         "ntpu": "NTPU",
         "nanliao": "nnn",
+        "potou": "potou",
+        "poto": "poto",
     }
 
     backend_scene_name = scene_mapping.get(scene_name.lower(), "NYCU")
@@ -2224,26 +2226,26 @@ async def generate_iss_map(
                 if first_tx:
                     # 確保座標系統一致
                     tx_pos = first_tx["position"]
-                    map_center = [tx_pos[0], -tx_pos[1], tx_pos[2]]
+                    map_center = [tx_pos[0], -tx_pos[1],1.5]
                     logger.info(f"使用發射機({first_tx['name']})位置作為地圖中心: {map_center}")
                 else:
                     # 如果沒有發射機，回退到接收機
-                    map_center = [rx_position[0], rx_position[1], rx_position[2]]
+                    map_center = [rx_position[0], rx_position[1],1.5]
                     logger.info(f"未找到發射機，使用接收機位置作為地圖中心: {map_center}")
             else:
                 # 預設使用接收機位置作為中心
-                map_center = [rx_position[0], rx_position[1], rx_position[2]]
+                map_center = [rx_position[0], rx_position[1], 1.5]
                 logger.info(f"使用接收機位置作為地圖中心: {map_center}")
             
             rm_solver = RadioMapSolver()
             rm = rm_solver(scene,
-                           max_depth=20,           # Maximum number of ray scene interactions
+                           max_depth=5,           # Maximum number of ray scene interactions
                            samples_per_tx=samples_per_tx, 
                            cell_size=(actual_cell_size, actual_cell_size),      # Resolution of the radio map
                            center=map_center,       # Center of the radio map at receiver position
                            size=actual_map_size,       # Total size of the radio map
                            orientation=[0, 0, 0],
-                           refraction=True,
+                           refraction=False,
                            specular_reflection=True,
                            diffuse_reflection=True)
 
@@ -2289,19 +2291,30 @@ async def generate_iss_map(
             local_max = maximum_filter(iss_smooth, size=5)
             peaks = (iss_smooth == local_max)
 
-            # 設定強度門檻（百分位數）
-            threshold = np.percentile(iss_smooth, cfar_threshold_percentile)
+            # 簡化的CFAR檢測：直接找最大值峰值
+            iss_max = np.max(iss_smooth)
+            iss_mean = np.mean(iss_smooth)
             
-            # 使用 peak_local_max 找出高於門檻的最大值座標
-            if peak_local_max is not None:
-                peak_coords = peak_local_max(
-                    iss_smooth,
-                    min_distance=min_distance,           # 限制峰與峰最小距離
-                    threshold_abs=threshold   # 絕對強度門檻
-                )
+            # 只有當最大值明顯高於平均值時才認為有峰值
+            # 使用動態範圍的閾值：最大值需要超過平均值 + 2*標準差
+            iss_std = np.std(iss_smooth)
+            threshold = iss_mean + 0.1 * iss_std
+            
+            logger.info(f"CFAR檢測統計: max={iss_max:.2f}, mean={iss_mean:.2f}, std={iss_std:.2f}")
+            logger.info(f"CFAR閾值計算: {iss_mean:.2f} + 2×{iss_std:.2f} = {threshold:.2f}")
+            
+            peak_coords = []
+            if iss_max > threshold:
+                # 找到最大值的位置
+                max_indices = np.where(iss_smooth == iss_max)
+                if len(max_indices[0]) > 0:
+                    # 取第一個最大值位置 - 需要轉換為numpy陣列格式
+                    peak_coords = np.array([[max_indices[0][0], max_indices[1][0]]])
+                    logger.info(f"✓ 檢測到CFAR峰值: 位置({max_indices[0][0]}, {max_indices[1][0]}), 強度{iss_max:.2f}dBm > 閾值{threshold:.2f}dBm")
+                else:
+                    logger.info("✗ 無法定位最大值位置")
             else:
-                # 簡化版本的峰值檢測
-                peak_coords = np.column_stack(np.where((peaks) & (iss_smooth > threshold)))
+                logger.info(f"✗ 無CFAR峰值: 最大值{iss_max:.2f}dBm ≤ 閾值{threshold:.2f}dBm")
 
             # 準備 TSS 地圖數據 (不需要 CFAR 檢測)
             tss_smooth = gaussian_filter(TSS_dbm, sigma=gaussian_sigma)
@@ -2339,7 +2352,7 @@ async def generate_iss_map(
                         y_frontend = frontend_coords[1]
                         
                         # 轉換為GPS座標
-                        gps_coord = frontend_coords_to_gps(x_frontend, y_frontend, 0.0)
+                        gps_coord = frontend_coords_to_gps(x_frontend, y_frontend, 0.0, scene_name)
                         
                         # 獲取該位置的ISS強度值
                         iss_value = float(iss_dbm[row_idx, col_idx]) if row_idx < iss_dbm.shape[0] and col_idx < iss_dbm.shape[1] else 0.0
@@ -2577,13 +2590,69 @@ async def generate_iss_map(
         iss_success = verify_output_file(str(ISS_MAP_IMAGE_PATH))
         tss_success = verify_output_file(str(TSS_MAP_IMAGE_PATH))
         
-        return iss_success and tss_success and uav_sparse_success
+        # 將峰值數據轉換為GPS座標（用於直接返回）
+        cfar_peaks_gps = []
+        if len(peak_coords) > 0:
+            logger.info(f"轉換 {len(peak_coords)} 個CFAR峰值為GPS座標...")
+            from app.api.v1.interference.routes_sparse_scan import frontend_coords_to_gps
+            
+            for i, coord in enumerate(peak_coords):
+                # coord = [row, col] in the ISS map grid
+                row_idx, col_idx = coord[0], coord[1]
+                
+                # 確保索引在有效範圍內
+                if 0 <= row_idx < len(y_unique) and 0 <= col_idx < len(x_unique):
+                    # 從grid座標轉換為實際座標（Sionna座標系）
+                    x_sionna = float(x_unique[col_idx])
+                    y_sionna = float(y_unique[row_idx])
+                    
+                    # 從Sionna座標轉換為前端座標
+                    frontend_coords = to_frontend_coords([x_sionna, y_sionna, 0])
+                    x_frontend = frontend_coords[0]
+                    y_frontend = frontend_coords[1]
+                    
+                    # 轉換為GPS座標
+                    gps_coord = frontend_coords_to_gps(x_frontend, y_frontend, 0.0, scene_name)
+                    
+                    # 獲取該位置的ISS強度值
+                    iss_value = float(iss_dbm[row_idx, col_idx]) if row_idx < iss_dbm.shape[0] and col_idx < iss_dbm.shape[1] else 0.0
+                    
+                    peak_info = {
+                        "peak_id": i + 1,
+                        "grid_coords": {"row": int(row_idx), "col": int(col_idx)},
+                        "sionna_coords": {"x": x_sionna, "y": y_sionna},
+                        "frontend_coords": {"x": x_frontend, "y": y_frontend},
+                        "gps_coords": {
+                            "latitude": gps_coord.latitude,
+                            "longitude": gps_coord.longitude,
+                            "altitude": gps_coord.altitude
+                        },
+                        "iss_strength_dbm": iss_value
+                    }
+                    cfar_peaks_gps.append(peak_info)
+                    
+                    logger.info(f"CFAR峰值 {i+1}: Grid({row_idx}, {col_idx}) -> Frontend({x_frontend:.1f}, {y_frontend:.1f}) -> GPS({gps_coord.latitude:.6f}, {gps_coord.longitude:.6f}), ISS: {iss_value:.1f} dBm")
+                else:
+                    logger.warning(f"峰值索引 {coord} 超出grid範圍 {iss_dbm.shape}")
+        
+        # 返回成功狀態和峰值數據
+        overall_success = iss_success and tss_success and uav_sparse_success
+        return {
+            "success": overall_success,
+            "cfar_peaks_gps": cfar_peaks_gps,
+            "total_peaks": len(cfar_peaks_gps)
+        }
 
     except Exception as e:
         logger.exception(f"生成 ISS 地圖時發生錯誤: {e}")
         # 確保關閉所有打開的圖表
         plt.close("all")
-        return False
+        return {
+            "success": False,
+            "cfar_peaks_gps": [],
+            "total_peaks": 0,
+            "error": str(e)
+        }
 
 
 # --- 主服務類 ---

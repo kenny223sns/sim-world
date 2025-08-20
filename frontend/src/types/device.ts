@@ -14,6 +14,7 @@ export interface Device {
     active: boolean;
     visible?: boolean; // 設備在3D場景中的可見性
     role: string; // 使用角色字段
+    model_type?: string; // 3D模型類型：tower, iphone, uav, jam
 }
 
 // 用於創建設備的介面
@@ -29,6 +30,7 @@ export interface DeviceCreate {
   power_dbm?: number;
   active: boolean;
   visible?: boolean;
+  model_type?: string;
 }
 
 // 用於更新設備的介面
@@ -44,4 +46,5 @@ export interface DeviceUpdate {
   power_dbm?: number;
   active?: boolean;
   visible?: boolean;
+  model_type?: string;
 } 

@@ -859,84 +859,86 @@ const Sidebar: React.FC<SidebarProps> = ({
                 )}
             </div>
 
-            {/* 稀疏 UAV 掃描控制區域 */}
-            <div className="control-container">
-                <h3 
-                    className={`section-title collapsible-header ${showSparseSection ? 'expanded' : ''}`}
-                    onClick={() => setShowSparseSection(!showSparseSection)}
-                >
-                    稀疏 UAV 掃描 {sparseScan.isLoading && <span className="loading-indicator">⏳</span>}
-                </h3>
-                {showSparseSection && (
-                    <div className="control-section">
-                        <div className="control-row">
-                            <button 
-                                onClick={sparseScan.play}
-                                disabled={sparseScan.isPlaying || sparseScan.isLoading || selectedReceiverIds.length === 0}
-                                className="scan-button play-button"
-                            >
-                                開始掃描
-                            </button>
-                            <button 
-                                onClick={sparseScan.pause}
-                                disabled={!sparseScan.isPlaying}
-                                className="scan-button pause-button"
-                            >
-                                暫停掃描
-                            </button>
-                            <button 
-                                onClick={sparseScan.reset}
-                                disabled={sparseScan.isPlaying}
-                                className="scan-button reset-button"
-                            >
-                                重設掃描
-                            </button>
-                        </div>
-                        
-                        <div className="scan-info">
-                            <div className="progress-info">
-                                進度: {sparseScan.progress}% ({sparseScan.currentIdx}/{sparseScan.data?.points.length || 0})
+            {/* 稀疏 UAV 掃描控制區域 - 已隱藏 */}
+            {false && (
+                <div className="control-container">
+                    <h3 
+                        className={`section-title collapsible-header ${showSparseSection ? 'expanded' : ''}`}
+                        onClick={() => setShowSparseSection(!showSparseSection)}
+                    >
+                        稀疏 UAV 掃描 {sparseScan.isLoading && <span className="loading-indicator">⏳</span>}
+                    </h3>
+                    {showSparseSection && (
+                        <div className="control-section">
+                            <div className="control-row">
+                                <button 
+                                    onClick={sparseScan.play}
+                                    disabled={sparseScan.isPlaying || sparseScan.isLoading || selectedReceiverIds.length === 0}
+                                    className="scan-button play-button"
+                                >
+                                    開始掃描
+                                </button>
+                                <button 
+                                    onClick={sparseScan.pause}
+                                    disabled={!sparseScan.isPlaying}
+                                    className="scan-button pause-button"
+                                >
+                                    暫停掃描
+                                </button>
+                                <button 
+                                    onClick={sparseScan.reset}
+                                    disabled={sparseScan.isPlaying}
+                                    className="scan-button reset-button"
+                                >
+                                    重設掃描
+                                </button>
                             </div>
-                            {sparseScan.error && (
-                                <div className="error-message">錯誤: {sparseScan.error}</div>
+                            
+                            <div className="scan-info">
+                                <div className="progress-info">
+                                    進度: {sparseScan.progress}% ({sparseScan.currentIdx}/{sparseScan.data?.points.length || 0})
+                                </div>
+                                {sparseScan.error && (
+                                    <div className="error-message">錯誤: {sparseScan.error}</div>
+                                )}
+                            </div>
+                            
+                            <div className="control-row">
+                                <button 
+                                    onClick={sparseScan.exportCSV}
+                                    disabled={!sparseScan.data || sparseScan.currentIdx === 0}
+                                    className="export-button"
+                                >
+                                    導出 CSV
+                                </button>
+                                <button 
+                                    onClick={() => setShowRadioMapViewer(!showRadioMapViewer)}
+                                    className={`map-viewer-button ${showRadioMapViewer ? 'active' : ''}`}
+                                >
+                                    {showRadioMapViewer ? '隱藏' : '顯示'}電波地圖
+                                </button>
+                            </div>
+                            
+                            {selectedReceiverIds.length === 0 && (
+                                <div className="warning-message">
+                                    ⚠️ 請先選擇至少一個接收器 (receiver) 設備
+                                </div>
+                            )}
+                            
+                            {showRadioMapViewer && (
+                                <div className="radio-map-container">
+                                    <RadioMapViewer
+                                        scanData={sparseScan.data}
+                                        samples={sparseScan.samples}
+                                        currentIdx={sparseScan.currentIdx}
+                                        scene={currentScene}
+                                    />
+                                </div>
                             )}
                         </div>
-                        
-                        <div className="control-row">
-                            <button 
-                                onClick={sparseScan.exportCSV}
-                                disabled={!sparseScan.data || sparseScan.currentIdx === 0}
-                                className="export-button"
-                            >
-                                導出 CSV
-                            </button>
-                            <button 
-                                onClick={() => setShowRadioMapViewer(!showRadioMapViewer)}
-                                className={`map-viewer-button ${showRadioMapViewer ? 'active' : ''}`}
-                            >
-                                {showRadioMapViewer ? '隱藏' : '顯示'}電波地圖
-                            </button>
-                        </div>
-                        
-                        {selectedReceiverIds.length === 0 && (
-                            <div className="warning-message">
-                                ⚠️ 請先選擇至少一個接收器 (receiver) 設備
-                            </div>
-                        )}
-                        
-                        {showRadioMapViewer && (
-                            <div className="radio-map-container">
-                                <RadioMapViewer
-                                    scanData={sparseScan.data}
-                                    samples={sparseScan.samples}
-                                    currentIdx={sparseScan.currentIdx}
-                                    scene={currentScene}
-                                />
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
+                    )}
+                </div>
+            )}
 
             <div className="devices-list">
                 {/* 新增設備區塊 */}

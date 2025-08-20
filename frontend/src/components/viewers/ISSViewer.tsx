@@ -75,22 +75,59 @@ const ISSViewer: React.FC<ViewerProps> = ({
     )
 
     // 獲取CFAR峰值GPS數據
-    const loadCFARPeaksGPS = useCallback(async () => {
-        if (currentMapType !== 'iss') return // 只有ISS地圖才有CFAR峰值
+    const loadCFARPeaksGPS = useCallback(async (forceRefresh: boolean = false) => {
+        if (currentMapType !== 'iss') {
+            setCfarPeaksGPS([]) // 非ISS地圖時清空峰值數據
+            return
+        }
         
         setCfarLoading(true)
+        setCfarPeaksGPS([]) // 載入前先清空舊數據
+        
         try {
-            // 使用sparse-scan API獲取CFAR峰值GPS數據
-            const response = await fetch(`${ApiRoutes.interference.sparseScan}?scene=${currentScene}`)
+            // 使用ISS地圖CFAR峰值專用API獲取數據，根據需要強制刷新
+            const params = new URLSearchParams({
+                scene: currentScene,
+                t: Date.now().toString()
+            })
+            
+            if (forceRefresh) {
+                params.append('force_refresh', 'true')
+            }
+            
+            const response = await fetch(`${ApiRoutes.simulations.getISSMapCFARPeaks}?${params}`)
             if (response.ok) {
                 const data = await response.json()
-                if (data.success && data.cfar_peaks_gps) {
-                    setCfarPeaksGPS(data.cfar_peaks_gps)
-                    console.log(`獲取到 ${data.cfar_peaks_gps.length} 個CFAR峰值GPS位置`)
+                if (data.success) {
+                    // 確保peaks是陣列且過濾掉無效數據
+                    const peaks = Array.isArray(data.cfar_peaks_gps) ? data.cfar_peaks_gps : []
+                    const validPeaks = peaks.filter(peak => 
+                        peak && 
+                        peak.gps_coords && 
+                        typeof peak.gps_coords.latitude === 'number' && 
+                        typeof peak.gps_coords.longitude === 'number'
+                    )
+                    
+                    setCfarPeaksGPS(validPeaks)
+                    console.log(`從ISS地圖獲取到 ${validPeaks.length} 個有效CFAR峰值GPS位置 (原始: ${peaks.length})`)
+                    
+                    if (peaks.length === 0) {
+                        console.log('ISS地圖沒有檢測到CFAR峰值')
+                    }
+                } else {
+                    // API調用成功但沒有數據時，清空峰值
+                    setCfarPeaksGPS([])
+                    console.log('ISS地圖CFAR峰值API調用成功但沒有數據:', data.error || '未知原因')
                 }
+            } else {
+                // API調用失敗時，清空峰值
+                setCfarPeaksGPS([])
+                console.error('ISS地圖CFAR峰值API調用失敗:', response.status)
             }
         } catch (error) {
             console.error('獲取CFAR峰值GPS數據失敗:', error)
+            // 發生錯誤時，清空峰值避免顯示過期數據
+            setCfarPeaksGPS([])
         } finally {
             setCfarLoading(false)
         }
@@ -121,7 +158,7 @@ const ISSViewer: React.FC<ViewerProps> = ({
             device.role === 'desired' && device.active
         )
         const jammerDevices = tempDevices.filter(device => 
-            device.role === 'jammer' && device.active
+            device.role === 'jammer' && device.active && device.visible === true
         )
 
         // 構建 API 參數
@@ -160,6 +197,9 @@ const ISSViewer: React.FC<ViewerProps> = ({
         }
 
         // 先發起 ISS 地圖請求（會同時生成 ISS、TSS 和 UAV Sparse 地圖）
+        // 啟用return_json參數獲取CFAR峰值數據
+        params.append('return_json', 'true')
+        
         const issUrl = `${ApiRoutes.simulations.getISSMap}?${params.toString()}`
         
         console.log('ISS Map API URL:', issUrl)
@@ -169,25 +209,62 @@ const ISSViewer: React.FC<ViewerProps> = ({
             if (!response.ok) {
                 throw new Error(`ISS 地圖 API 請求失敗: ${response.status} ${response.statusText}`)
             }
-            return response.blob()
+            // 檢查Content-Type來決定如何解析回應
+            const contentType = response.headers.get('content-type')
+            if (contentType && contentType.includes('application/json')) {
+                return response.json()
+            } else {
+                return response.blob()
+            }
         })
-        .then(issBlob => {
-            // 檢查是否收到了有效的圖片數據
-            if (issBlob.size === 0) {
-                throw new Error('接收到空的 ISS 圖像數據')
-            }
+        .then(result => {
+            // 處理JSON回應（包含CFAR峰值）
+            if (result && typeof result === 'object' && 'success' in result) {
+                if (!result.success) {
+                    throw new Error('ISS 地圖生成失敗')
+                }
 
-            // 清理舊的 ISS URL
-            if (imageUrlRef.current) {
-                URL.revokeObjectURL(imageUrlRef.current)
+                // 設置ISS地圖圖片URL
+                const newIssUrl = `${result.image_url}?t=${Date.now()}`
+                setImageUrl(newIssUrl)
+                
+                // 直接設置CFAR峰值GPS數據
+                if (result.cfar_peaks_gps) {
+                    const peaks = Array.isArray(result.cfar_peaks_gps) ? result.cfar_peaks_gps : []
+                    const validPeaks = peaks.filter(peak => 
+                        peak && 
+                        peak.gps_coords && 
+                        typeof peak.gps_coords.latitude === 'number' && 
+                        typeof peak.gps_coords.longitude === 'number'
+                    )
+                    
+                    setCfarPeaksGPS(validPeaks)
+                    console.log(`從ISS地圖直接獲取到 ${validPeaks.length} 個有效CFAR峰值GPS位置`)
+                } else {
+                    setCfarPeaksGPS([])
+                }
+            } 
+            // 處理Blob回應（傳統圖片）
+            else if (result instanceof Blob) {
+                // 檢查是否收到了有效的圖片數據
+                if (result.size === 0) {
+                    throw new Error('接收到空的 ISS 圖像數據')
+                }
+
+                // 清理舊的 ISS URL
+                if (imageUrlRef.current) {
+                    URL.revokeObjectURL(imageUrlRef.current)
+                }
+                
+                // 創建新的 ISS URL
+                const newIssUrl = URL.createObjectURL(result)
+                setImageUrl(newIssUrl)
+                
+                // ISS 地圖載入成功後，獲取CFAR峰值GPS數據（傳統方式）
+                setTimeout(() => {
+                    loadCFARPeaksGPS(true)
+                }, 500)
             }
-            
-            // 創建新的 ISS URL
-            const newIssUrl = URL.createObjectURL(issBlob)
-            setImageUrl(newIssUrl)
-            
-            // ISS 地圖載入成功後，獲取CFAR峰值GPS數據
-            loadCFARPeaksGPS()
             
             // ISS 地圖載入成功後，再請求 TSS 地圖（此時應該已經生成）
             const tssUrl = `${ApiRoutes.simulations.getTSSMap}?t=${Date.now()}`
@@ -285,12 +362,17 @@ const ISSViewer: React.FC<ViewerProps> = ({
         reportIsLoadingToNavbar(isLoading)
     }, [isLoading, reportIsLoadingToNavbar])
 
-    // 當切換到ISS地圖時，獲取CFAR峰值GPS數據
+    // 當切換到ISS地圖時或設備狀態變更時，獲取CFAR峰值GPS數據
     useEffect(() => {
         if (currentMapType === 'iss' && imageUrl) {
-            loadCFARPeaksGPS()
+            // 延遲載入CFAR峰值，確保ISS地圖已完成生成
+            const timer = setTimeout(() => {
+                loadCFARPeaksGPS()
+            }, 1000) // 1秒延遲
+            
+            return () => clearTimeout(timer)
         }
-    }, [currentMapType, imageUrl, loadCFARPeaksGPS])
+    }, [currentMapType, imageUrl, loadCFARPeaksGPS, tempDevices])
 
     useEffect(() => {
         loadMaps()
@@ -321,233 +403,7 @@ const ISSViewer: React.FC<ViewerProps> = ({
 
     return (
         <div className="image-viewer iss-image-container">
-            {/* 地圖設定提示 */}
-            <div style={{
-                padding: '10px',
-                marginBottom: '10px',
-                backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                borderLeft: '4px solid #007bff',
-                borderRadius: '4px',
-                fontSize: '14px',
-                color: '#ffffff'
-            }}>
-                <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>
-                    🗺️ 地圖設定
-                </div>
-                <div style={{ fontSize: '12px', color: '#ccc' }}>
-                    目前使用: {cellSize}米/像素, {mapWidth}×{mapHeight} 像素 ({(cellSize * mapWidth).toFixed(1)}×{(cellSize * mapHeight).toFixed(1)}米)
-                </div>
-                <div style={{ fontSize: '12px', color: '#aaa', marginTop: '3px' }}>
-                    💡 在右側面板的「地圖設定」中調整解析度和大小，同時影響 UAV 掃描與干擾檢測地圖
-                </div>
-            </div>
 
-            {/* 稀疏UAV掃描控制區域 */}
-            <div style={{
-                padding: '10px',
-                marginBottom: '10px',
-                backgroundColor: 'rgba(255, 165, 0, 0.1)',
-                borderLeft: '4px solid #ffa500',
-                borderRadius: '4px',
-                fontSize: '14px',
-                color: '#ffffff'
-            }}>
-                <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'space-between',
-                    marginBottom: '10px' 
-                }}>
-                    <div style={{ fontWeight: 'bold' }}>
-                        🛸 稀疏UAV掃描
-                    </div>
-                    <button
-                        onClick={() => setShowSparseSection(!showSparseSection)}
-                        style={{
-                            padding: '5px 10px',
-                            background: 'rgba(255, 255, 255, 0.2)',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            fontSize: '12px'
-                        }}
-                    >
-                        {showSparseSection ? '隱藏' : '顯示'}
-                    </button>
-                </div>
-                
-                {showSparseSection && (
-                    <div>
-                        {/* 掃描控制按鈕 */}
-                        <div style={{ marginBottom: '10px' }}>
-                            <button
-                                onClick={sparseScan.play}
-                                disabled={sparseScan.isLoading || sparseScan.isPlaying}
-                                style={{
-                                    marginRight: '10px',
-                                    padding: '8px 15px',
-                                    background: sparseScan.isPlaying ? '#6c757d' : '#28a745',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: sparseScan.isLoading || sparseScan.isPlaying ? 'not-allowed' : 'pointer',
-                                    fontSize: '14px'
-                                }}
-                            >
-                                {sparseScan.isLoading ? '載入中...' : sparseScan.isPlaying ? '掃描中...' : '開始掃描'}
-                            </button>
-                            
-                            <button
-                                onClick={sparseScan.pause}
-                                disabled={!sparseScan.isPlaying}
-                                style={{
-                                    marginRight: '10px',
-                                    padding: '8px 15px',
-                                    background: !sparseScan.isPlaying ? '#6c757d' : '#dc3545',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: !sparseScan.isPlaying ? 'not-allowed' : 'pointer',
-                                    fontSize: '14px'
-                                }}
-                            >
-                                暫停
-                            </button>
-                            
-                            <button
-                                onClick={sparseScan.reset}
-                                style={{
-                                    marginRight: '10px',
-                                    padding: '8px 15px',
-                                    background: '#6f42c1',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer',
-                                    fontSize: '14px'
-                                }}
-                            >
-                                重置
-                            </button>
-                            
-                            <button
-                                onClick={sparseScan.exportCSV}
-                                disabled={!sparseScan.data}
-                                style={{
-                                    padding: '8px 15px',
-                                    background: !sparseScan.data ? '#6c757d' : '#17a2b8',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: !sparseScan.data ? 'not-allowed' : 'pointer',
-                                    fontSize: '14px'
-                                }}
-                            >
-                                匯出CSV
-                            </button>
-                        </div>
-
-                        {/* 掃描狀態資訊 */}
-                        <div style={{ 
-                            fontSize: '12px', 
-                            color: '#ccc',
-                            marginBottom: '10px' 
-                        }}>
-                            {sparseScan.data && (
-                                <div>
-                                    進度: {sparseScan.progress}% ({sparseScan.currentIdx}/{sparseScan.data.points.length})
-                                    {sparseScan.getScanPointsCount() > 0 && (
-                                        <span> | 已掃描: {sparseScan.getScanPointsCount()} 點</span>
-                                    )}
-                                </div>
-                            )}
-                            {sparseScan.error && (
-                                <div style={{ color: '#ff6b6b' }}>
-                                    錯誤: {sparseScan.error}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* 接收器選擇 */}
-                        {receiverDevices.length > 0 && (
-                            <div style={{ marginBottom: '10px' }}>
-                                <div style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '13px' }}>
-                                    📡 接收器選擇:
-                                </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                    {receiverDevices.map(device => (
-                                        <label
-                                            key={device.id}
-                                            style={{
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                fontSize: '12px',
-                                                cursor: 'pointer',
-                                                padding: '4px 8px',
-                                                backgroundColor: selectedReceiverIds.includes(device.id) 
-                                                    ? 'rgba(40, 167, 69, 0.3)' 
-                                                    : 'rgba(255, 255, 255, 0.1)',
-                                                borderRadius: '4px'
-                                            }}
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={selectedReceiverIds.includes(device.id)}
-                                                onChange={(e) => handleReceiverSelect(device.id, e.target.checked)}
-                                                style={{ marginRight: '5px' }}
-                                            />
-                                            {device.name} ({device.position_x.toFixed(0)}, {device.position_y.toFixed(0)})
-                                        </label>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* 視覺化切換按鈕 */}
-                        <div style={{ 
-                            display: 'flex', 
-                            gap: '10px',
-                            marginTop: '10px' 
-                        }}>
-                            <button
-                                onClick={() => setShowSparseVisualization(!showSparseVisualization)}
-                                style={{
-                                    padding: '6px 12px',
-                                    background: showSparseVisualization ? '#28a745' : 'rgba(255, 255, 255, 0.2)',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: 'pointer',
-                                    fontSize: '12px'
-                                }}
-                            >
-                                {showSparseVisualization ? '隱藏' : '顯示'} 稀疏可視化
-                            </button>
-                            
-                            <button
-                                onClick={() => setShowRadioMapViewer(!showRadioMapViewer)}
-                                disabled={!hasScanData()}
-                                style={{
-                                    padding: '6px 12px',
-                                    background: !hasScanData() 
-                                        ? '#6c757d' 
-                                        : showRadioMapViewer 
-                                            ? '#28a745' 
-                                            : 'rgba(255, 255, 255, 0.2)',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px',
-                                    cursor: !hasScanData() ? 'not-allowed' : 'pointer',
-                                    fontSize: '12px'
-                                }}
-                            >
-                                {showRadioMapViewer ? '隱藏' : '顯示'} 無線電地圖
-                            </button>
-                        </div>
-                    </div>
-                )}
-            </div>
             
             {hasTempDevices && (
                 <div style={{
@@ -626,14 +482,6 @@ const ISSViewer: React.FC<ViewerProps> = ({
                             UAV Sparse 地圖
                         </button>
                     </div>
-                    <div style={{ fontSize: '12px', color: '#aaa', marginTop: '8px' }}>
-                        💡 ISS 地圖包含 2D-CFAR 檢測峰值，TSS 地圖顯示總信號強度分佈，UAV Sparse 地圖顯示 UAV 軌跡稀疏採樣點
-                        {!uavSparseImageUrl && (
-                            <div style={{ marginTop: '4px', color: '#ff9800' }}>
-                                ℹ️ UAV Sparse 地圖需要先進行 UAV 稀疏掃描才能顯示
-                            </div>
-                        )}
-                    </div>
                 </div>
             )}
             {isLoading && (
@@ -664,108 +512,119 @@ const ISSViewer: React.FC<ViewerProps> = ({
                     <img
                         src={imageUrl}
                         alt="ISS Map - Interference Signal Strength with 2D-CFAR Detection"
-                        className="view-image iss-view-image"
+                        className="iss-view-image"
                     />
                     
                     {/* CFAR峰值GPS位置顯示 */}
-                    {cfarPeaksGPS.length > 0 && (
-                        <div style={{
-                            marginTop: '15px',
-                            padding: '15px',
-                            backgroundColor: 'rgba(0, 123, 255, 0.1)',
-                            borderLeft: '4px solid #007bff',
-                            borderRadius: '4px',
-                            fontSize: '14px',
-                            color: '#ffffff'
-                        }}>
-                            <div style={{ fontWeight: 'bold', marginBottom: '10px', display: 'flex', alignItems: 'center' }}>
-                                <span>🎯 CFAR 峰值 GPS 位置</span>
-                                {cfarLoading && <span style={{ marginLeft: '10px', fontSize: '12px', color: '#ffa500' }}>載入中...</span>}
+                    <div style={{
+                        marginTop: '15px',
+                        padding: '15px',
+                        backgroundColor: cfarPeaksGPS.length > 0 ? 'rgba(0, 123, 255, 0.1)' : 'rgba(128, 128, 128, 0.1)',
+                        borderLeft: cfarPeaksGPS.length > 0 ? '4px solid #007bff' : '4px solid #aaa',
+                        borderRadius: '4px',
+                        fontSize: '14px',
+                        color: '#ffffff'
+                    }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '10px', display: 'flex', alignItems: 'center' }}>
+                            <span>🎯 CFAR 峰值 GPS 位置</span>
+                            {cfarLoading && <span style={{ marginLeft: '10px', fontSize: '12px', color: '#ffa500' }}>載入中...</span>}
+                            {cfarPeaksGPS.length > 1 && (
                                 <span style={{ marginLeft: '10px', fontSize: '12px', color: '#aaa' }}>
-                                    ({cfarPeaksGPS.length} 個檢測點)
+                                    (顯示 1/{cfarPeaksGPS.length})
                                 </span>
-                            </div>
-                            
-                            <div style={{ 
-                                maxHeight: '200px', 
-                                overflowY: 'auto', 
-                                border: '1px solid rgba(255,255,255,0.1)',
+                            )}
+                        </div>
+                        
+                        {cfarLoading ? (
+                            /* 載入中狀態 */
+                            <div style={{
+                                padding: '12px',
+                                backgroundColor: 'rgba(255,255,255,0.05)',
                                 borderRadius: '4px',
-                                padding: '8px'
+                                fontSize: '13px',
+                                textAlign: 'center',
+                                color: '#ffa500'
                             }}>
-                                {cfarPeaksGPS.map((peak, index) => (
-                                    <div key={peak.peak_id} style={{
-                                        marginBottom: '8px',
-                                        padding: '8px',
-                                        backgroundColor: 'rgba(255,255,255,0.05)',
-                                        borderRadius: '4px',
-                                        fontSize: '12px'
-                                    }}>
-                                        <div style={{ fontWeight: 'bold', color: '#4fc3f7' }}>
-                                            峰值 #{peak.peak_id}
-                                        </div>
-                                        <div style={{ marginTop: '4px' }}>
-                                            <span style={{ color: '#81c784' }}>GPS:</span> {peak.gps_coords.latitude.toFixed(6)}°N, {peak.gps_coords.longitude.toFixed(6)}°E
-                                        </div>
-                                        <div style={{ marginTop: '2px' }}>
-                                            <span style={{ color: '#ffb74d' }}>前端座標:</span> ({peak.frontend_coords.x.toFixed(1)}, {peak.frontend_coords.y.toFixed(1)})
-                                        </div>
-                                        <div style={{ marginTop: '2px' }}>
-                                            <span style={{ color: '#f48fb1' }}>ISS強度:</span> {peak.iss_strength_dbm.toFixed(2)} dBm
-                                        </div>
-                                        <div style={{ marginTop: '4px' }}>
-                                            <a 
-                                                href={`https://www.google.com/maps?q=${peak.gps_coords.latitude},${peak.gps_coords.longitude}`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                style={{ 
-                                                    color: '#64b5f6', 
-                                                    textDecoration: 'none',
-                                                    fontSize: '11px'
-                                                }}
-                                                onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
-                                                onMouseOut={(e) => e.target.style.textDecoration = 'none'}
-                                            >
-                                                📍 在 Google Maps 中查看
-                                            </a>
-                                        </div>
-                                    </div>
-                                ))}
+                                <div style={{ fontSize: '16px', marginBottom: '8px' }}>⏳</div>
+                                <div style={{ fontWeight: 'bold' }}>正在檢測CFAR峰值...</div>
+                                <div style={{ fontSize: '12px', marginTop: '4px', color: '#ccc' }}>
+                                    分析ISS地圖中的干擾信號峰值
+                                </div>
                             </div>
-                            
-                            <div style={{ fontSize: '11px', color: '#aaa', marginTop: '8px' }}>
-                                💡 點擊 GPS 連結可在 Google Maps 中查看確切位置。座標基於 Potou 場景轉換。
+                        ) : cfarPeaksGPS.length > 0 ? (
+                            /* 顯示第一個峰值 */
+                            <div style={{
+                                padding: '12px',
+                                backgroundColor: 'rgba(255,255,255,0.05)',
+                                borderRadius: '4px',
+                                fontSize: '13px'
+                            }}>
+                                <div style={{ fontWeight: 'bold', color: '#4fc3f7', marginBottom: '8px' }}>
+                                    峰值 #{cfarPeaksGPS[0].peak_id}
+                                </div>
+                                <div style={{ marginBottom: '6px' }}>
+                                    <span style={{ color: '#81c784', fontWeight: 'bold' }}>GPS座標:</span> {cfarPeaksGPS[0].gps_coords.latitude.toFixed(6)}°N, {cfarPeaksGPS[0].gps_coords.longitude.toFixed(6)}°E
+                                </div>
+                                <div style={{ marginBottom: '6px' }}>
+                                    <span style={{ color: '#ffb74d', fontWeight: 'bold' }}>前端座標:</span> ({cfarPeaksGPS[0].frontend_coords.x.toFixed(1)}, {cfarPeaksGPS[0].frontend_coords.y.toFixed(1)})
+                                </div>
+                                <div style={{ marginBottom: '8px' }}>
+                                    <span style={{ color: '#f48fb1', fontWeight: 'bold' }}>ISS強度:</span> {cfarPeaksGPS[0].iss_strength_dbm.toFixed(2)} dBm
+                                </div>
+                                <div>
+                                    <a 
+                                        href={`https://www.google.com/maps?q=${cfarPeaksGPS[0].gps_coords.latitude},${cfarPeaksGPS[0].gps_coords.longitude}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{ 
+                                            color: '#64b5f6', 
+                                            textDecoration: 'none',
+                                            fontSize: '12px',
+                                            fontWeight: 'bold'
+                                        }}
+                                        onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                                        onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                                    >
+                                        📍 在 Google Maps 中查看位置
+                                    </a>
+                                </div>
                             </div>
+                        ) : (
+                            /* 沒有偵測到峰值時顯示 */
+                            <div style={{
+                                padding: '12px',
+                                backgroundColor: 'rgba(255,255,255,0.05)',
+                                borderRadius: '4px',
+                                fontSize: '13px',
+                                textAlign: 'center',
+                                color: '#aaa'
+                            }}>
+                                <div style={{ fontSize: '16px', marginBottom: '8px' }}>❌</div>
+                                <div style={{ fontWeight: 'bold' }}>找不到jammer</div>
+                                <div style={{ fontSize: '12px', marginTop: '4px', color: '#999' }}>
+                                    沒有偵測到CFAR峰值，可能干擾源較弱或不在檢測範圍內
+                                </div>
+                            </div>
+                        )}
+                        
+                        <div style={{ fontSize: '11px', color: '#aaa', marginTop: '8px' }}>
+                            💡 {cfarPeaksGPS.length > 0 ? '顯示最強信號峰值位置。點擊連結在 Google Maps 中查看確切地理位置。' : 'CFAR檢測可識別干擾信號的峰值位置。'}
                         </div>
-                    )}
-                    
-                    {currentMapType === 'iss' && !cfarLoading && cfarPeaksGPS.length === 0 && imageUrl && (
-                        <div style={{
-                            marginTop: '15px',
-                            padding: '10px',
-                            backgroundColor: 'rgba(255, 193, 7, 0.1)',
-                            borderLeft: '4px solid #ffc107',
-                            borderRadius: '4px',
-                            fontSize: '13px',
-                            color: '#ffc107'
-                        }}>
-                            ℹ️ 當前 ISS 地圖未檢測到 CFAR 峰值，可能干擾源較弱或不在檢測範圍內
-                        </div>
-                    )}
+                    </div>
                 </div>
             )}
             {currentMapType === 'tss' && tssImageUrl && (
                 <img
                     src={tssImageUrl}
                     alt="TSS Map - Total Signal Strength"
-                    className="view-image iss-view-image"
+                    className="iss-view-image"
                 />
             )}
             {currentMapType === 'uav-sparse' && uavSparseImageUrl && (
                 <img
                     src={uavSparseImageUrl}
                     alt="UAV Sparse Map - UAV Trajectory TSS Sampling"
-                    className="view-image iss-view-image"
+                    className="iss-view-image"
                 />
             )}
 

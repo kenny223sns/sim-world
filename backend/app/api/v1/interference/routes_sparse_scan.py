@@ -24,27 +24,46 @@ router = APIRouter(prefix="/interference", tags=["Sparse ISS Sampling"])
 # 座標轉換服務實例
 coordinate_service = CoordinateService()
 
-def frontend_coords_to_gps(x_m: float, y_m: float, z_m: float = 0.0) -> GeoCoordinate:
+def frontend_coords_to_gps(x_m: float, y_m: float, z_m: float = 0.0, scene: str = "potou") -> GeoCoordinate:
     """
-    將前端座標系統轉換為GPS座標
+    將前端座標系統轉換為GPS座標，支持不同場景
     
-    基於Potou場景座標系統：
-    - GPS基準點: (24.9255373543708, 120.97170270744304) 
-    - 對應前端座標: (-1800, -3500)
+    支援的場景：
+    - potou: 破斗山場景
+    - poto: 坡頭漁港場景
     """
     from app.domains.coordinates.services.coordinate_service import (
         ORIGIN_LATITUDE_POTOU, ORIGIN_LONGITUDE_POTOU,
         ORIGIN_FRONTEND_X_POTOU, ORIGIN_FRONTEND_Y_POTOU,
-        LATITUDE_SCALE_PER_METER_Y, LONGITUDE_SCALE_PER_METER_X
+        LATITUDE_SCALE_PER_METER_Y, LONGITUDE_SCALE_PER_METER_X,
+        ORIGIN_LATITUDE_POTO, ORIGIN_LONGITUDE_POTO,
+        ORIGIN_FRONTEND_X_POTO, ORIGIN_FRONTEND_Y_POTO,
+        LATITUDE_SCALE_PER_METER_Y_POTO, LONGITUDE_SCALE_PER_METER_X_POTO
     )
     
+    # 根據場景選擇對應的參數
+    if scene.lower() == "poto":
+        origin_lat = ORIGIN_LATITUDE_POTO
+        origin_lon = ORIGIN_LONGITUDE_POTO
+        origin_x = ORIGIN_FRONTEND_X_POTO
+        origin_y = ORIGIN_FRONTEND_Y_POTO
+        lat_scale = LATITUDE_SCALE_PER_METER_Y_POTO
+        lon_scale = LONGITUDE_SCALE_PER_METER_X_POTO
+    else:  # 默認使用potou參數
+        origin_lat = ORIGIN_LATITUDE_POTOU
+        origin_lon = ORIGIN_LONGITUDE_POTOU
+        origin_x = ORIGIN_FRONTEND_X_POTOU
+        origin_y = ORIGIN_FRONTEND_Y_POTOU
+        lat_scale = LATITUDE_SCALE_PER_METER_Y
+        lon_scale = LONGITUDE_SCALE_PER_METER_X
+    
     # 計算相對於基準點的偏移（前端座標米為單位）
-    delta_x = x_m - ORIGIN_FRONTEND_X_POTOU  # 相對於基準點的X偏移
-    delta_y = y_m - ORIGIN_FRONTEND_Y_POTOU  # 相對於基準點的Y偏移
+    delta_x = x_m - origin_x  # 相對於基準點的X偏移
+    delta_y = y_m - origin_y  # 相對於基準點的Y偏移
     
     # 轉換為GPS座標
-    latitude = ORIGIN_LATITUDE_POTOU + (delta_y * LATITUDE_SCALE_PER_METER_Y)
-    longitude = ORIGIN_LONGITUDE_POTOU + (delta_x * LONGITUDE_SCALE_PER_METER_X)
+    latitude = origin_lat + (delta_y * lat_scale)
+    longitude = origin_lon + (delta_x * lon_scale)
     
     return GeoCoordinate(
         latitude=latitude,
@@ -213,7 +232,8 @@ async def get_sparse_scan(
                         gps_coord = frontend_coords_to_gps(
                             device.position_x, 
                             device.position_y, 
-                            device.position_z
+                            device.position_z,
+                            scene
                         )
                         jammer_locations_gps.append({
                             "device_id": device.id,
@@ -235,19 +255,79 @@ async def get_sparse_scan(
             except Exception as e:
                 logger.error(f"獲取干擾源GPS位置失敗: {e}")
         
-        # 獲取ISS地圖的CFAR峰值GPS座標
+        # 對真實ISS地圖數據執行CFAR峰值檢測
         cfar_peaks_gps = []
         try:
-            from app.domains.simulation.services.sionna_service import generate_iss_map
-            # 檢查是否有快取的峰值數據
-            if hasattr(generate_iss_map, '_iss_cache'):
-                for cache_key, cached_data in generate_iss_map._iss_cache.items():
-                    if 'peak_locations_gps' in cached_data and cached_data['peak_locations_gps']:
-                        cfar_peaks_gps = cached_data['peak_locations_gps']
-                        logger.info(f"從ISS地圖快取獲取到 {len(cfar_peaks_gps)} 個CFAR峰值GPS位置")
-                        break
+            from scipy.ndimage import gaussian_filter
+            
+            # 對ISS地圖執行CFAR檢測
+            iss_smooth = gaussian_filter(iss_map, sigma=1.0)
+            
+            # 統計閾值計算
+            iss_mean = np.mean(iss_smooth)
+            iss_std = np.std(iss_smooth)
+            iss_max = np.max(iss_smooth)
+            
+            # 更嚴格的閾值設定
+            percentile_threshold = np.percentile(iss_smooth, 99.8)  # 提高到99.8%
+            statistical_threshold = iss_mean + 4 * iss_std  # 4-sigma規則
+            max_threshold = iss_max * 0.7  # 提高到70%
+            
+            threshold = max(percentile_threshold, statistical_threshold, max_threshold)
+            
+            # 峰值檢測
+            try:
+                from skimage.feature import peak_local_maxima as peak_local_max
+            except ImportError:
+                try:
+                    from skimage.feature import peak_local_max
+                except ImportError:
+                    peak_local_max = None
+            
+            if peak_local_max is not None:
+                peak_coords = peak_local_max(
+                    iss_smooth,
+                    min_distance=15,  # 增加最小距離
+                    threshold_abs=threshold
+                )
+                
+                # 限制最多檢測5個最強峰值
+                if len(peak_coords) > 5:
+                    # 按強度排序，取前5個
+                    peak_intensities = [iss_smooth[coord[0], coord[1]] for coord in peak_coords]
+                    sorted_indices = np.argsort(peak_intensities)[::-1]  # 降序
+                    peak_coords = peak_coords[sorted_indices[:5]]
+                
+                logger.info(f"Real data - CFAR檢測參數: threshold={threshold:.2f}, mean={iss_mean:.2f}, std={iss_std:.2f}, max={iss_max:.2f}")
+                logger.info(f"Real data - 檢測到 {len(peak_coords)} 個CFAR峰值")
+                
+                # 轉換峰值座標為GPS
+                for i, coord in enumerate(peak_coords):
+                    row_idx, col_idx = coord[0], coord[1]
+                    
+                    if 0 <= row_idx < len(frontend_y_axis) and 0 <= col_idx < len(frontend_x_axis):
+                        x_frontend = frontend_x_axis[col_idx]
+                        y_frontend = frontend_y_axis[row_idx]
+                        
+                        gps_coord = frontend_coords_to_gps(x_frontend, y_frontend, 0.0, scene)
+                        iss_value = float(iss_map[row_idx, col_idx])
+                        
+                        peak_info = {
+                            "peak_id": i + 1,
+                            "grid_coords": {"row": int(row_idx), "col": int(col_idx)},
+                            "frontend_coords": {"x": x_frontend, "y": y_frontend},
+                            "gps_coords": {
+                                "latitude": gps_coord.latitude,
+                                "longitude": gps_coord.longitude,
+                                "altitude": gps_coord.altitude
+                            },
+                            "iss_strength_dbm": iss_value
+                        }
+                        cfar_peaks_gps.append(peak_info)
+            
         except Exception as e:
-            logger.warning(f"獲取CFAR峰值GPS位置失敗: {e}")
+            logger.warning(f"Real data - CFAR峰值檢測失敗: {e}")
+            cfar_peaks_gps = []
 
         return {
             "success": True,
@@ -475,7 +555,8 @@ async def create_sample_sparse_scan_data(
                     gps_coord = frontend_coords_to_gps(
                         device.position_x, 
                         device.position_y, 
-                        device.position_z
+                        device.position_z,
+                        "sample"
                     )
                     jammer_locations_gps.append({
                         "device_id": device.id,
@@ -497,19 +578,83 @@ async def create_sample_sparse_scan_data(
         except Exception as e:
             logger.error(f"Sample data - 獲取干擾源GPS位置失敗: {e}")
     
-    # 獲取ISS地圖的CFAR峰值GPS座標（也適用於sample data）
+    # 對於樣本數據，不使用快取的峰值數據，因為可能不匹配
+    # 樣本數據應該根據實際生成的樣本ISS地圖進行CFAR檢測
     cfar_peaks_gps = []
+    
+    # 對樣本ISS地圖執行簡化的CFAR峰值檢測
     try:
-        from app.domains.simulation.services.sionna_service import generate_iss_map
-        # 檢查是否有快取的峰值數據
-        if hasattr(generate_iss_map, '_iss_cache'):
-            for cache_key, cached_data in generate_iss_map._iss_cache.items():
-                if 'peak_locations_gps' in cached_data and cached_data['peak_locations_gps']:
-                    cfar_peaks_gps = cached_data['peak_locations_gps']
-                    logger.info(f"Sample data - 從ISS地圖快取獲取到 {len(cfar_peaks_gps)} 個CFAR峰值GPS位置")
-                    break
+        # 對iss_map執行CFAR檢測
+        from scipy.ndimage import gaussian_filter, maximum_filter
+        
+        # 平滑處理
+        iss_smooth = gaussian_filter(iss_map, sigma=1.0)
+        
+        # 統計閾值計算
+        iss_mean = np.mean(iss_smooth)
+        iss_std = np.std(iss_smooth)
+        iss_max = np.max(iss_smooth)
+        
+        # 更嚴格的閾值設定
+        percentile_threshold = np.percentile(iss_smooth, 99.8)  # 提高到99.8%
+        statistical_threshold = iss_mean + 4 * iss_std  # 4-sigma規則
+        max_threshold = iss_max * 0.7  # 提高到70%
+        
+        threshold = max(percentile_threshold, statistical_threshold, max_threshold)
+        
+        # 峰值檢測
+        try:
+            from skimage.feature import peak_local_maxima as peak_local_max
+        except ImportError:
+            try:
+                from skimage.feature import peak_local_max
+            except ImportError:
+                peak_local_max = None
+        
+        if peak_local_max is not None:
+            peak_coords = peak_local_max(
+                iss_smooth,
+                min_distance=15,  # 增加最小距離
+                threshold_abs=threshold
+            )
+            
+            # 限制最多檢測5個最強峰值
+            if len(peak_coords) > 5:
+                # 按強度排序，取前5個
+                peak_intensities = [iss_smooth[coord[0], coord[1]] for coord in peak_coords]
+                sorted_indices = np.argsort(peak_intensities)[::-1]  # 降序
+                peak_coords = peak_coords[sorted_indices[:5]]
+            
+            logger.info(f"Sample data - CFAR檢測參數: threshold={threshold:.2f}, mean={iss_mean:.2f}, std={iss_std:.2f}, max={iss_max:.2f}")
+            logger.info(f"Sample data - 檢測到 {len(peak_coords)} 個CFAR峰值")
+            
+            # 轉換峰值座標為GPS
+            for i, coord in enumerate(peak_coords):
+                row_idx, col_idx = coord[0], coord[1]
+                
+                if 0 <= row_idx < len(frontend_y_axis) and 0 <= col_idx < len(frontend_x_axis):
+                    x_frontend = frontend_x_axis[col_idx]
+                    y_frontend = frontend_y_axis[row_idx]
+                    
+                    gps_coord = frontend_coords_to_gps(x_frontend, y_frontend, 0.0, "sample")
+                    iss_value = float(iss_map[row_idx, col_idx])
+                    
+                    peak_info = {
+                        "peak_id": i + 1,
+                        "grid_coords": {"row": int(row_idx), "col": int(col_idx)},
+                        "frontend_coords": {"x": x_frontend, "y": y_frontend},
+                        "gps_coords": {
+                            "latitude": gps_coord.latitude,
+                            "longitude": gps_coord.longitude,
+                            "altitude": gps_coord.altitude
+                        },
+                        "iss_strength_dbm": iss_value
+                    }
+                    cfar_peaks_gps.append(peak_info)
+        
     except Exception as e:
-        logger.warning(f"Sample data - 獲取CFAR峰值GPS位置失敗: {e}")
+        logger.warning(f"Sample data - CFAR峰值檢測失敗: {e}")
+        cfar_peaks_gps = []
     
     return {
         "success": True,

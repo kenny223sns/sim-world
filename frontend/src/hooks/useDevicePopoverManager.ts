@@ -16,6 +16,7 @@ export interface NewDevice {
     power_dbm: number;
     active: boolean;
     role: string;
+    model_type?: string; // 3D模型類型
 }
 
 interface UseDevicePopoverManagerProps {
@@ -202,6 +203,7 @@ export const useDevicePopoverManager = ({
             orientation_y: Number(popoverDevice.orientation_y) || 0,
             orientation_z: Number(popoverDevice.orientation_z) || 0,
             power_dbm: Number(popoverDevice.power_dbm) || 0,
+            model_type: popoverDevice.model_type || (popoverDevice.role === 'desired' ? 'tower' : null),
         };
 
         try {

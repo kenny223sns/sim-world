@@ -26,6 +26,7 @@ class DeviceBase(SQLModel):
     power_dbm: int = Field(default=0)
     active: bool = Field(default=True, index=True)
     visible: bool = Field(default=True, index=True)  # 設備在3D場景中的可見性
+    model_type: Optional[str] = Field(default=None, sa_type=String(50))  # 3D模型類型：tower, iphone, uav, jam
 
 
 # Represents the table structure, inherits validation from DeviceBase

@@ -53,6 +53,7 @@ const MainScene: React.FC<MainSceneProps> = ({
     const backendSceneName = getBackendSceneName(sceneName)
     const SCENE_URL = ApiRoutes.scenes.getSceneModel(backendSceneName)
     const BS_MODEL_URL = ApiRoutes.simulations.getModel('tower')
+    const IPHONE_MODEL_URL = ApiRoutes.simulations.getModel('iphone')
     const UAV_MODEL_URL = ApiRoutes.simulations.getModel('uav')
     const JAMMER_MODEL_URL = ApiRoutes.simulations.getModel('jam')
     const SATELLITE_TEXTURE_URL = ApiRoutes.scenes.getSceneTexture(
@@ -64,9 +65,10 @@ const MainScene: React.FC<MainSceneProps> = ({
     useMemo(() => {
         useGLTF.preload(SCENE_URL)
         useGLTF.preload(BS_MODEL_URL)
+        useGLTF.preload(IPHONE_MODEL_URL)
         useGLTF.preload(UAV_MODEL_URL)
         useGLTF.preload(JAMMER_MODEL_URL)
-    }, [SCENE_URL, BS_MODEL_URL, UAV_MODEL_URL, JAMMER_MODEL_URL])
+    }, [SCENE_URL, BS_MODEL_URL, IPHONE_MODEL_URL, UAV_MODEL_URL, JAMMER_MODEL_URL])
 
     // 加載主場景模型，使用 useMemo 避免重複加載
     const { scene: mainScene } = useGLTF(SCENE_URL) as any
@@ -209,16 +211,38 @@ const MainScene: React.FC<MainSceneProps> = ({
                     />
                 )
             } else if (device.role === 'desired') {
+                // 根據 model_type 選擇模型URL，默認使用 tower
+                const getTxModelUrl = () => {
+                    switch (device.model_type) {
+                        case 'iphone':
+                            return IPHONE_MODEL_URL
+                        case 'tower':
+                        default:
+                            return BS_MODEL_URL
+                    }
+                }
+
+                // 根據模型類型調整縮放比例
+                const getModelScale = () => {
+                    switch (device.model_type) {
+                        case 'iphone':
+                            return [0.2, 0.2, 0.2]  // iPhone需要較小的縮放
+                        case 'tower':
+                        default:
+                            return [0.15, 0.15, 0.15]        // Tower縮小到合適大小
+                    }
+                }
+
                 return (
                     <StaticModel
                         key={device.id}
-                        url={UAV_MODEL_URL}
+                        url={getTxModelUrl()}
                         position={[
                             device.position_x,
-                            device.position_z + 5,
+                            device.position_z ,
                             device.position_y,
                         ]}
-                        scale={[20, 20, 20]}
+                        scale={getModelScale()}
                         pivotOffset={[0, 0, 0]}
                     />
                 )
@@ -249,6 +273,7 @@ const MainScene: React.FC<MainSceneProps> = ({
         uavAnimation,
         selectedReceiverIds,
         BS_MODEL_URL,
+        IPHONE_MODEL_URL,
         UAV_MODEL_URL,
         JAMMER_MODEL_URL,
         sparseScanData,

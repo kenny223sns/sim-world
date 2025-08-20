@@ -48,6 +48,7 @@ export const ApiRoutes = {
     getChannelResponsePlots: `${API_BASE_URL}/simulations/channel-response`,
     getSceneImage: `${API_BASE_URL}/simulations/scene-image`,
     getISSMap: `${API_BASE_URL}/simulations/iss-map`,
+    getISSMapCFARPeaks: `${API_BASE_URL}/simulations/iss-map-cfar-peaks`, // ISS地圖CFAR峰值API
     getTSSMap: `${API_BASE_URL}/simulations/tss-map`, // TSS 地圖API
     getUAVSparseMap: `${API_BASE_URL}/simulations/uav-sparse-map`, // UAV Sparse 地圖API
     getSparseISSMap: `${API_BASE_URL}/simulations/iss-map-sparse`, // 新增稀疏ISS地圖API
