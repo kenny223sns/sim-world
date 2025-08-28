@@ -42,7 +42,6 @@ const ISSViewer: React.FC<ViewerProps> = ({
     
     // CFAR峰值GPS顯示狀態
     const [cfarPeaksGPS, setCfarPeaksGPS] = useState<CFARPeakGPS[]>([])
-    const [cfarLoading, setCfarLoading] = useState(false)
 
     // 使用稀疏掃描hook
     const sparseScan = useSparseUAVScan({
@@ -74,63 +73,10 @@ const ISSViewer: React.FC<ViewerProps> = ({
         device.role === 'receiver' && device.active
     )
 
-    // 獲取CFAR峰值GPS數據
+    // 已棄用：CFAR峰值現在直接從ISS地圖API的JSON回應中獲取
     const loadCFARPeaksGPS = useCallback(async (forceRefresh: boolean = false) => {
-        if (currentMapType !== 'iss') {
-            setCfarPeaksGPS([]) // 非ISS地圖時清空峰值數據
-            return
-        }
-        
-        setCfarLoading(true)
-        setCfarPeaksGPS([]) // 載入前先清空舊數據
-        
-        try {
-            // 使用ISS地圖CFAR峰值專用API獲取數據，根據需要強制刷新
-            const params = new URLSearchParams({
-                scene: currentScene,
-                t: Date.now().toString()
-            })
-            
-            if (forceRefresh) {
-                params.append('force_refresh', 'true')
-            }
-            
-            const response = await fetch(`${ApiRoutes.simulations.getISSMapCFARPeaks}?${params}`)
-            if (response.ok) {
-                const data = await response.json()
-                if (data.success) {
-                    // 確保peaks是陣列且過濾掉無效數據
-                    const peaks = Array.isArray(data.cfar_peaks_gps) ? data.cfar_peaks_gps : []
-                    const validPeaks = peaks.filter(peak => 
-                        peak && 
-                        peak.gps_coords && 
-                        typeof peak.gps_coords.latitude === 'number' && 
-                        typeof peak.gps_coords.longitude === 'number'
-                    )
-                    
-                    setCfarPeaksGPS(validPeaks)
-                    console.log(`從ISS地圖獲取到 ${validPeaks.length} 個有效CFAR峰值GPS位置 (原始: ${peaks.length})`)
-                    
-                    if (peaks.length === 0) {
-                        console.log('ISS地圖沒有檢測到CFAR峰值')
-                    }
-                } else {
-                    // API調用成功但沒有數據時，清空峰值
-                    setCfarPeaksGPS([])
-                    console.log('ISS地圖CFAR峰值API調用成功但沒有數據:', data.error || '未知原因')
-                }
-            } else {
-                // API調用失敗時，清空峰值
-                setCfarPeaksGPS([])
-                console.error('ISS地圖CFAR峰值API調用失敗:', response.status)
-            }
-        } catch (error) {
-            console.error('獲取CFAR峰值GPS數據失敗:', error)
-            // 發生錯誤時，清空峰值避免顯示過期數據
-            setCfarPeaksGPS([])
-        } finally {
-            setCfarLoading(false)
-        }
+        console.log('loadCFARPeaksGPS 已棄用，CFAR峰值現在直接從ISS地圖API獲取')
+        return
     }, [currentMapType, currentScene])
 
 
@@ -152,6 +98,8 @@ const ISSViewer: React.FC<ViewerProps> = ({
     const loadMaps = useCallback(() => {
         setIsLoading(true)
         setError(null)
+        // 清空舊的CFAR峰值數據，確保每次重新載入都是從空狀態開始
+        setCfarPeaksGPS([])
 
         // 從設備中獲取 TX 和所有 Jammer 位置
         const txDevice = tempDevices.find(device => 
@@ -228,20 +176,20 @@ const ISSViewer: React.FC<ViewerProps> = ({
                 const newIssUrl = `${result.image_url}?t=${Date.now()}`
                 setImageUrl(newIssUrl)
                 
-                // 直接設置CFAR峰值GPS數據
-                if (result.cfar_peaks_gps) {
-                    const peaks = Array.isArray(result.cfar_peaks_gps) ? result.cfar_peaks_gps : []
-                    const validPeaks = peaks.filter(peak => 
-                        peak && 
-                        peak.gps_coords && 
-                        typeof peak.gps_coords.latitude === 'number' && 
-                        typeof peak.gps_coords.longitude === 'number'
-                    )
-                    
-                    setCfarPeaksGPS(validPeaks)
-                    console.log(`從ISS地圖直接獲取到 ${validPeaks.length} 個有效CFAR峰值GPS位置`)
-                } else {
-                    setCfarPeaksGPS([])
+                // 直接設置CFAR峰值GPS數據 - 無論有無數據都要更新
+                const peaks = Array.isArray(result.cfar_peaks_gps) ? result.cfar_peaks_gps : []
+                const validPeaks = peaks.filter(peak => 
+                    peak && 
+                    peak.gps_coords && 
+                    typeof peak.gps_coords.latitude === 'number' && 
+                    typeof peak.gps_coords.longitude === 'number'
+                )
+                
+                setCfarPeaksGPS(validPeaks)
+                console.log(`從ISS地圖直接獲取到 ${validPeaks.length} 個有效CFAR峰值GPS位置`)
+                
+                if (validPeaks.length === 0) {
+                    console.log('本次ISS地圖檢測沒有找到CFAR峰值')
                 }
             } 
             // 處理Blob回應（傳統圖片）
@@ -260,10 +208,9 @@ const ISSViewer: React.FC<ViewerProps> = ({
                 const newIssUrl = URL.createObjectURL(result)
                 setImageUrl(newIssUrl)
                 
-                // ISS 地圖載入成功後，獲取CFAR峰值GPS數據（傳統方式）
-                setTimeout(() => {
-                    loadCFARPeaksGPS(true)
-                }, 500)
+                // Blob回應已棄用，現在ISS地圖API直接返回JSON包含CFAR峰值
+                setCfarPeaksGPS([])
+                console.log('使用傳統Blob回應，無CFAR峰值數據')
             }
             
             // ISS 地圖載入成功後，再請求 TSS 地圖（此時應該已經生成）
@@ -362,17 +309,7 @@ const ISSViewer: React.FC<ViewerProps> = ({
         reportIsLoadingToNavbar(isLoading)
     }, [isLoading, reportIsLoadingToNavbar])
 
-    // 當切換到ISS地圖時或設備狀態變更時，獲取CFAR峰值GPS數據
-    useEffect(() => {
-        if (currentMapType === 'iss' && imageUrl) {
-            // 延遲載入CFAR峰值，確保ISS地圖已完成生成
-            const timer = setTimeout(() => {
-                loadCFARPeaksGPS()
-            }, 1000) // 1秒延遲
-            
-            return () => clearTimeout(timer)
-        }
-    }, [currentMapType, imageUrl, loadCFARPeaksGPS, tempDevices])
+    // CFAR峰值現在直接從ISS地圖API的JSON回應中獲取，不需要額外的useEffect
 
     useEffect(() => {
         loadMaps()
@@ -527,7 +464,6 @@ const ISSViewer: React.FC<ViewerProps> = ({
                     }}>
                         <div style={{ fontWeight: 'bold', marginBottom: '10px', display: 'flex', alignItems: 'center' }}>
                             <span>🎯 CFAR 峰值 GPS 位置</span>
-                            {cfarLoading && <span style={{ marginLeft: '10px', fontSize: '12px', color: '#ffa500' }}>載入中...</span>}
                             {cfarPeaksGPS.length > 1 && (
                                 <span style={{ marginLeft: '10px', fontSize: '12px', color: '#aaa' }}>
                                     (顯示 1/{cfarPeaksGPS.length})
@@ -535,23 +471,7 @@ const ISSViewer: React.FC<ViewerProps> = ({
                             )}
                         </div>
                         
-                        {cfarLoading ? (
-                            /* 載入中狀態 */
-                            <div style={{
-                                padding: '12px',
-                                backgroundColor: 'rgba(255,255,255,0.05)',
-                                borderRadius: '4px',
-                                fontSize: '13px',
-                                textAlign: 'center',
-                                color: '#ffa500'
-                            }}>
-                                <div style={{ fontSize: '16px', marginBottom: '8px' }}>⏳</div>
-                                <div style={{ fontWeight: 'bold' }}>正在檢測CFAR峰值...</div>
-                                <div style={{ fontSize: '12px', marginTop: '4px', color: '#ccc' }}>
-                                    分析ISS地圖中的干擾信號峰值
-                                </div>
-                            </div>
-                        ) : cfarPeaksGPS.length > 0 ? (
+                        {cfarPeaksGPS.length > 0 ? (
                             /* 顯示第一個峰值 */
                             <div style={{
                                 padding: '12px',
@@ -562,14 +482,8 @@ const ISSViewer: React.FC<ViewerProps> = ({
                                 <div style={{ fontWeight: 'bold', color: '#4fc3f7', marginBottom: '8px' }}>
                                     峰值 #{cfarPeaksGPS[0].peak_id}
                                 </div>
-                                <div style={{ marginBottom: '6px' }}>
-                                    <span style={{ color: '#81c784', fontWeight: 'bold' }}>GPS座標:</span> {cfarPeaksGPS[0].gps_coords.latitude.toFixed(6)}°N, {cfarPeaksGPS[0].gps_coords.longitude.toFixed(6)}°E
-                                </div>
-                                <div style={{ marginBottom: '6px' }}>
-                                    <span style={{ color: '#ffb74d', fontWeight: 'bold' }}>前端座標:</span> ({cfarPeaksGPS[0].frontend_coords.x.toFixed(1)}, {cfarPeaksGPS[0].frontend_coords.y.toFixed(1)})
-                                </div>
                                 <div style={{ marginBottom: '8px' }}>
-                                    <span style={{ color: '#f48fb1', fontWeight: 'bold' }}>ISS強度:</span> {cfarPeaksGPS[0].iss_strength_dbm.toFixed(2)} dBm
+                                    <span style={{ color: '#81c784', fontWeight: 'bold' }}>干擾源座標:</span> {cfarPeaksGPS[0].gps_coords.latitude.toFixed(6)}°N, {cfarPeaksGPS[0].gps_coords.longitude.toFixed(6)}°E
                                 </div>
                                 <div>
                                     <a 

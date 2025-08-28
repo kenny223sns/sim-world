@@ -170,11 +170,19 @@ export const useDevicePopoverManager = ({
             devices.map(d => ({ name: d.name }))
         );
         
-        // 更新角色和名稱
+        // 根據新角色設置適當的model_type
+        let newModelType = null;
+        if (newRole === 'desired') {
+            // 發射器角色預設使用tower模型
+            newModelType = 'tower';
+        }
+        
+        // 更新角色、名稱和模型類型
         setPopoverDevice(prev => ({ 
             ...prev, 
             role: newRole,
-            name: newName
+            name: newName,
+            model_type: newModelType
         }));
     }, [devices]);
 
